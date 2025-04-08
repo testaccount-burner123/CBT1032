@@ -1,0 +1,69 @@
+//BENMARSF JOB (ACCT#),B-MARINO,
+//         NOTIFY=BENMAR,CLASS=B,MSGCLASS=X
+//*
+//*-----------------------------------------------------------------*/
+//*                                                                 */
+//* Optional ZXPC server external security implementation JCL       */
+//*                                                                 */
+//*    This JCL procedure defines resource class XPCCLASS to RACF.  */
+//*                                                                 */
+//*    STEP1: Defines the XPCCLASS to the dynamic RACF class        */
+//*           descriptor table.                                     */
+//*                                                                 */
+//*    STEP2: Issues RACF command to activate class XPCCLASS.       */
+//*                                                                 */
+//*    STEP3: Issues RACF command to RACLIST class XPCCLASS.        */
+//*                                                                 */
+//*    STEP4: Defines the ZXPC resource name.                       */
+//*                                                                 */
+//*    STEP5: Grants permission to selected users.                  */
+//*                                                                 */
+//* Note: Refer to SOURCE($DOC) for installation documentation.     */
+//*                                                                 */
+//*-----------------------------------------------------------------*/
+//*
+//*   RDEFINE XPCCLASS
+//*
+//STEP1    EXEC PGM=IKJEFT01,DYNAMNBR=30,REGION=0M
+//SYSTSPRT  DD SYSOUT=*
+//SYSTSIN   DD *
+ RDEFINE CDT XPCCLASS UACC(NONE) +
+    CDTINFO(DEFAULTUACC(NONE) FIRST(ALPHA) MAXLENGTH(32) +
+    OTHER(ALPHA,NUMERIC,SPECIAL) POSIT(128) RACLIST(ALLOWED) +
+    SECLABELSREQUIRED(YES))
+/*
+//*
+//*   Activate XPCCLASS
+//*
+//STEP2    EXEC PGM=IKJEFT01,DYNAMNBR=30,REGION=0M
+//SYSTSPRT  DD SYSOUT=*
+//SYSTSIN   DD *
+ SETROPTS CLASSACT(XPCCLASS)
+/*
+//*
+//*   RACLIST XPCCLASS
+//*
+//STEP3    EXEC PGM=IKJEFT01,DYNAMNBR=30,REGION=0M
+//SYSTSPRT  DD SYSOUT=*
+//SYSTSIN   DD *
+ SETROPTS RACLIST(CDT) REFRESH
+/*
+//*
+//*   RDEFINE ZXPC resource profiles
+//*
+//STEP4    EXEC PGM=IKJEFT01,DYNAMNBR=30,REGION=0M
+//SYSTSPRT  DD SYSOUT=*
+//SYSTSIN   DD *
+ RDEFINE XPCCLASS ZXPC.CMD.AUTH UACC(NONE)
+ RDEFINE XPCCLASS ZXPC.API.AUTH UACC(NONE)
+/*
+//*
+//*  Grant READ access to ZXPC command users
+//*
+//STEP5    EXEC PGM=IKJEFT01,DYNAMNBR=30,REGION=0M
+//SYSTSPRT  DD SYSOUT=*
+//SYSTSIN   DD *
+ PERMIT  ZXPC.CMD.AUTH CLASS(XPCCLASS) ID(userID) ACCESS(READ)
+ PERMIT  ZXPC.API.AUTH CLASS(XPCCLASS) ID(userID) ACCESS(READ)
+/*
+//

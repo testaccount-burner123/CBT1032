@@ -1,0 +1,183 @@
+************************************************************************
+*                                                                      *
+*  Ben Marino's ZXPC System Events Server API                          *
+*                                                                      *
+*   Retired Senior Software Engineer, IT Architect                     *
+*                                                                      *
+*                                                                      *
+*  ZXPC SOURCE DOCUMENTATION:                                          *
+*                                                                      *
+* -------------------------------------------------------------------- *
+* ------------------- S E R V E R  R O U T I N E S ------------------- *
+* -------------------------------------------------------------------- *
+*                                                                      *
+*  XPCINI  - ZXPC server initialization routine.                       *
+*            Receives control in the Master Scheduler address space    *
+*            to initialize the ZXPC server environment.                *
+*                                                                      *
+*  XPCSRV  - ZXPC server stacking PC router.                           *
+*            The ZXPC server allows software programs running in any   *
+*            address space to call its service routines. It supports   *
+*            service callers running in Primary-mode and AR-mode.      *
+*                                                                      *
+*  XPCNUC  - Contains common service routines used by various ZXPC     *
+*            server functions.                                         *
+*            PARSE    - General data parse service routine             *
+*            GETJOB   - Jobname/program name service routine           *
+*            LOCJOB   - Locate job service routine                     *
+*            ASYTRG   - initialize where event triggered               *
+*            ASYRUN   - Initialize where event listener runs           *
+*            ASYSCH   - Schedule SRB service routine                   *
+*            ASYSRB   - Schedule IRB service routine                   *
+*            ASYIRB   - Invoke system event listener routine           *
+*            RMTRXIT  - PURGEDQ resource termination manager           *
+*            GETLOCL  - Obtain LOCAL lock service routine              *
+*            FRELOCL  - Release LOCAL lock service routine             *
+*            GETCMSL  - Obtain LOCAL & CMS lock service routine        *
+*            FRECMSL  - Release CMS & LOCAL lock service routine       *
+*                                                                      *
+*  XPCRTM  - TCB-mode Recovery Termination Manager.                    *
+*            Performs recovery on behalf of all unlocked ZXPC          *
+*            server routines.                                          *
+*                                                                      *
+*  XPCFRR  - FRR Recovery Termination Manager.                         *
+*            Performs recovery on behalf of SRB-mode routines and      *
+*            locked TCB-mode routines.                                 *
+*                                                                      *
+*  XPCCMD  - ZXPC Server Command Listener.                             *
+*            Receives control from SVC-34 SSI call when commands are   *
+*            issued by any task in any address space.                  *
+*                                                                      *
+*  XPCWTO  - ZXPC Server WTO message listener.                         *
+*            Receives control from SVC-35 SSI call when WTO messages   *
+*            are issued by any task in any address space.              *
+*                                                                      *
+*  XPCSOM  - ZXPC Server start-of-memory listener.                     *
+*            Receives control from the MVS initiator when a jobstep    *
+*            task is attached in an address space.                     *
+*                                                                      *
+*  XPCEOM  - ZXPC Server end-of-memory listener.                       *
+*            Receives control from MVS MEMTERM when an address space   *
+*            normally or abnormally terminates.                        *
+*                                                                      *
+*  XPCEOT  - ZXPC Server end-of-task listener.                         *
+*            Receives control from EOT when a task in any address      *
+*            space normally or abnormally terminates.                  *
+*                                                                      *
+*  XPCMSG  - ZXPC Server WTO message Manager.                          *
+*            Receives control from ZXPC server routines to issue WTO   *
+*            messages in either TCB or SRB mode.                       *
+*                                                                      *
+*  XPCENF  - Event Notification Facility (ENF) event listener.         *
+*            Receives control from ENF to filter and process selected  *
+*            ENF system events.                                        *
+*                                                                      *
+*  XPCDB2  - DB2 subsystem event listener.                             *
+*            Receives control from DB2 to process dababase events.     *
+*                                                                      *
+*  XPCXCF  - Cross-coupling facility (XCF) event listener.             *
+*            Receives control from XCF to filter and process selected  *
+*            XCF system events.                                        *
+*                                                                      *
+*  XPCTST  - System event listener test program.                       *
+*            Sample test program that issues ZLISTEN service calls.    *
+*                                                                      *
+* -------------------------------------------------------------------- *
+* ------------------- S E R V I C E  M A C R O S --------------------- *
+* -------------------------------------------------------------------- *
+*                                                                      *
+*  ZLISTEN - System events listener facility.                          *
+*            Defines a listener routine that receives control when     *
+*            a specified system event occurs. The listener routine     *
+*            can execute under the TCB and address space where the     *
+*            event occurs, under a different TCB or under a TCB of     *
+*            different address space.                                  *
+*                                                                      *
+*  ZDYNLPA - Dynamic-LPA facility.                                     *
+*            Add/delete modules to/from dynamic-LPA. The module can    *
+*            be added in pageable or fixed storage and page protected  *
+*            storage.                                                  *
+*                                                                      *
+*  ZPROT   - Virtual storage validation facility.                      *
+*            The TPROT instruction does not distinguish between a      *
+*            valid and invalid storage address. When the referenced    *
+*            page is swapped out, TPROT sets translation not available *
+*            condition code 3.                                         *
+*                                                                      *
+*            ZPROT handles what TPROT does not. It validates a storage *
+*            address by determining if the storage key and PSW key     *
+*            match. ZPROT switches to the caller's PSW key and does    *
+*            fetch and store into the page. An invalid fetch and store *
+*            is handled by its FRR routine. ZPROT sets a return code   *
+*            in register 15 that indicates the result of the storage   *
+*            validation test as follows:                               *
+*                                                                      *
+*            R15 - return code                                         *
+*             00 - address is valid                                    *
+*             04 - 0C4-4  Protection Exception                         *
+*             08 - 0C5-5  Addressing Exception                         *
+*             12 - 0C4-10 Segment Translation Exception                *
+*             16 - 0C4-11 Page Translation Exception                   *
+*             20 - Internal service routine failure                    *
+*                                                                      *
+*  ZGETMEM - Storage management facility.                              *
+*            Obtains private storage outside the primary address space *
+*            by simply specifying the STOKEN, JOBname, STCname, or     *
+*            TSUname of the target address space.                      *
+*                                                                      *
+*  ZFREMEM - Storage management facility.                              *
+*            Releases private storage outside the primary address space*
+*            by simply specifying the STOKEN, JOBname, STCname, or     *
+*            TSUname of the target address space.                      *
+*                                                                      *
+*  ZCOPY   - Data copy facility.                                       *
+*            Copies data across address spaces without the use of      *
+*            SQA/CSA storage buffers by simply specifying the STOKEN,  *
+*            JOBname, STCname or TSUname of the target address space.  *
+*                                                                      *
+*  ZAUTH   - Authorization facility.                                   *
+*            Changes jobstep authorization to allow you to issue the   *
+*            MODESET Supervisor call without suffering S047 ABENDs.    *
+*                                                                      *
+* -------------------------------------------------------------------- *
+* ------------------- M A P P I N G  M A C R O S --------------------- *
+* -------------------------------------------------------------------- *
+*                                                                      *
+*  ZZASY   - System event listener routine parm data macro.            *
+*  ZZCALL  - Service request call macro.                               *
+*  ZZEQU   - General ZXPC subsystem server equates macro.              *
+*  ZZGBL   - ZXPC subsystem server global definitions.                 *
+*  ZZMAC   - ZXPC subsystem server environment macro. Generates the    *
+*            following macros:                                         *
+*            .XPC   - Stacking PC call                                 *
+*            .MID   - Module ID                                        *
+*            .CNVX  - Hexadecimal data conversion                      *
+*            .CNVD  - Decimal data conversion                          *
+*                                                                      *
+*  ZZRETRY - ZXPC Recovery environment macro.                          *
+*  ZZRUN   - Failsafe testing ZXPC server macro.                       *
+*  ZZRWA   - ZXPC subsystem server recovery workarea.                  *
+*  ZZTAB   - ZXPC Server table generation macro. Generates the         *
+*            following zerver tables:                                  *
+*            .SSVT vector table                                        *
+*            .Multiline WTO data lines table                           *
+*            .PCE service routine table                                *
+*            .CMD listener routine table                               *
+*            .WTO listener routine table                               *
+*            .Db2 listener routine table                               *
+*            .ENF listener routine table                               *
+*            .EOT listener routine table                               *
+*            .EOM listener routine table                               *
+*            .SVC listener routine table                               *
+*            .XCF listener routine table                               *
+*                                                                      *
+*  ZZRUN   -  ZXPC Failsafe server testing macro.                      *
+*  ZZTRC   -  ZXPC capture trace data macro.                           *
+*  ZZWTO   -  ZXPC subsystem server message macro.                     *
+*  ZZXRE   -  Listener routine work element macro.                     *
+*  ZZXSA   -  Common service routine extended savearea macro.          *
+*  ZZXVT   -  The ZXVT is a collection of address vectors, contains    *
+*             queue anchors and counters common to all ZXPC subsystem  *
+*             server modules.                                          *
+*                                                                      *
+* -------------------------------------------------------------------- *

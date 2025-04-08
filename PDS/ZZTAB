@@ -1,0 +1,659 @@
+         MACRO
+.*/*******************************************************************/
+.*/*                                                                 */
+.*/* Name:        ZZTAB                                              */
+.*/*                                                                 */
+.*/* Function:    ZXPC Server table generation macro                 */
+.*/*                                                                 */
+.*/* Description: Generates the following zerver tables:             */
+.*/*                                                                 */
+.*/*               1. SSVT vector table                              */
+.*/*               2. MLWTO data lines table                         */
+.*/*               3. PCE service routine table                      */
+.*/*               4. CMD listener routine table                     */
+.*/*               5. WTO listener routine table                     */
+.*/*               6. Db2 listener routine table                     */
+.*/*               7. ENF listener routine table                     */
+.*/*               8. EOT listener routine table                     */
+.*/*               9. EOM listener routine table                     */
+.*/*              10. SVC listener routine table                     */
+.*/*              11. XCF listener routine table                     */
+.*/*                                                                 */
+.*/* Copyright:   Ben Marino. 2021 - 2022 (unpublished)              */
+.*/*                                                                 */
+.*/*******************************************************************/
+.*---------------------------CHANGE LOG-------------------------------*
+.*                                                                    *
+.* ID    Rel    Date       Author        Comments                     *
+.*--------------------------------------------------------------------*
+.* @01 | V1R1 | 12072021 | Ben Marino  | Initial version              *
+.*     |      |          |             |                              *
+.**********************************************************************
+.*-------+---------+---------+---------+---------+---------+---------+*
+&ZID     ZZTAB &GEN=,                                                  +
+               &TYPE=,                                                 +
+               &EP=,                                                   +
+               &CODE=,                                                 +
+               &DATA=,                                                 +
+               &MODE=,                                                 +
+               &PCID=,                                                 +
+               &SAF=,                                                  +
+               &COMMAND=,                                              +
+               &LENGTH=,                                               +
+               &T=MSG,                                                 +
+               &DSECT=NO
+.*
+         AIF   ('&GEN' EQ 'SSI').GENSSI
+         AIF   ('&GEN' EQ 'PCE').GENPCE
+         AIF   ('&GEN' EQ 'CMD').GENCMD
+         AIF   ('&GEN' EQ 'WTO').GENWTO
+         AIF   ('&GEN' EQ 'DB2').GENDB2
+         AIF   ('&GEN' EQ 'ENF').GENENF
+         AIF   ('&GEN' EQ 'EOT').GENEOT
+         AIF   ('&GEN' EQ 'EOM').GENEOM
+         AIF   ('&GEN' EQ 'SVC').GENSVC
+         AIF   ('&GEN' EQ 'XCF').GENXCF
+         AIF   ('&GEN' EQ 'MSG').GENMSG
+         MNOTE 8,'*** ZZTAB Invalid GEN= operand specified'
+         MEXIT ,
+.*--------------------------------------------------------------------*
+.*                                                                    *
+.*       Generate SSVT vector table                                   *
+.*                                                                    *
+.*       Function Codes:  4 EOT    - SVC 3                            *
+.*                        8 EOM    - MEMTERM                          *
+.*                        9 WTO/R  - SVC 35                           *
+.*                       10 MGCR/E - SVC 34                           *
+.*                                                                    *
+.*-------+---------+---------+---------+---------+---------+---------+*
+.GENSSI  ANOP  ,
+         AIF   ('&DSECT' EQ 'NO').SSINODS
+         AIF   ('&DSECT' NE 'YES').SSI01
+ZSSVT    DSECT
+         AGO   .SSIYESD
+.SSINODS ANOP  ,
+ZSSVT    DS    0F
+.SSIYESD ANOP  ,
+         DC    H'00'              .reserved
+ZSSVTFC  DC    H'10'              .functions
+         DS    0XL256
+         DC    XL3'000000'
+ZSSVTFC1 DC    XL1'01'            .EOT
+         DC    XL3'000000'        .
+ZSSVTFC2 DC    XL1'02'            .EOM
+ZSSVTFC3 DC    XL1'03'            .WTO/R
+ZSSVTFC4 DC    XL1'04'            .MGCR/E
+         DC    61F'00'            .
+ZSSVTMX  EQU   *-ZSSVT
+ZSSVTSSI DS    0F                 .listener routines
+ZSSVTEOT DC    V(XPCEOT)          .XPCEOT EPA
+ZSSVTEOM DC    V(XPCEOM)          .XPCEOM EPA
+ZSSVTWTO DC    V(XPCWTO)          .XPCWTO EPA
+ZSSVTCMD DC    V(XPCCMD)          .XPCCMD EPA
+         DC    240F'00'           .
+         ORG   ZSSVTSSI+1024      .
+ZSSVT@SZ EQU   *-ZSSVT            .SSVT size
+         MEXIT ,
+.*
+.**      Macro Notes
+.*
+.SSI01   MNOTE 8,'*** SSI - DSECT operand specification error'
+         MEXIT ,
+.*--------------------------------------------------------------------*
+.*                                                                    *
+.*       Generate Multiline WTO data lines                            *
+.*                                                                    *
+.*-------+---------+---------+---------+---------+---------+---------+*
+.GENWTO  ANOP  ,
+         AIF   ('&DSECT' EQ 'NO').NEXTC
+*
+**       MLWTO Control Line
+*
+&T.C     DSECT ,
+         AGO   .NEXTC1
+.NEXTC   ANOP  ,
+&T.C     DS    0F
+.NEXTC1  ANOP  ,
+&T.CTLEN DC    AL2(38)                .control line text length
+&T.CMCSF DC    XL2'0040'              .MCS flags
+&T.CTEXT DS    0CL34                  .control line text
+&T.CTMID DC    CL8'XPC000I'           .message ID
+&T.CTSUB DC    CL4'ZXPC'              .server name
+&T.CTBLK DC    CL1' '                 .blank
+&T.CTCMD DC    CL21' '                .text data
+&T.CLTYP DC    XL2'8000'              .line type
+&T.CBYTE DC    X'00'                  .?
+&T.CTOTL DC    AL1(10)                .default number of data lines
+&T.C@SZE EQU   *-&T.C                 .control line size
+*
+**       MLWTO Data Line
+*
+         AIF   ('&DSECT' EQ 'NO').NEXTD
+&T.D     DSECT ,
+         AGO   .NEXTD1
+.NEXTD   ANOP  ,
+&T.D     EQU   *
+.NEXTD1  ANOP  ,
+&T.DTLEN DC    AL2(74)                .data line length
+&T.DLTYP DC    XL2'2000'              .line type
+&T.DDATA DC    CL70' '                .text data
+&T.D@LEN EQU   *-&T.DDATA             .text length
+&T.D@SZE EQU   *-&T.D                 .data line size
+&T.XSIZE EQU   24576                  .24K (256 data lines)
+&T.XMAXL EQU   24576/&T.D@SZE-2       .max number of data lines
+*
+**       MLWTO End Line
+*
+         AIF   ('&DSECT' EQ 'NO').NEXTE
+&T.E     DSECT ,
+         AGO   .NEXTE1
+.NEXTE   ANOP  ,
+&T.E     EQU   *
+.NEXTE1  ANOP  ,
+&T.ETLEN DC    AL2(74)                .end line length
+&T.ELTYP DC    XL2'3000'              .line type
+&T.ETEXT DC    CL70'XPC000I END'      .text data
+&T.E@SZE EQU   *-&T.E                 .line length
+         MEXIT ,
+.*--------------------------------------------------------------------*
+.*                                                                    *
+.*       Generate PCE service routine table                           *
+.*                                                                    *
+.*-------+---------+---------+---------+---------+---------+---------+*
+.GENPCE  ANOP  ,
+         AIF   ('&DSECT' EQ 'YES').PCELIST
+         AIF   ('&DSECT' NE 'NO').PCE00
+         AIF   ('&TYPE' EQ 'INITIAL').PCEINIT
+         AIF   ('&TYPE' EQ 'FINAL').PCEFINI
+         AIF   ('&TYPE' EQ 'ENTRY').PCEENTY
+         AGO   .PCE01
+.*
+.**      TYPE=INITIAL
+.*
+.PCEINIT ANOP  ,
+         DS    0F                    .initial table entry
+         MEXIT ,
+.*
+.**      TYPE=ENTRY
+.*
+.PCEENTY ANOP  ,
+         DS    0F
+         AIF   ('&EP' EQ '').PCE01
+         DC    A(&EP)                .PC routine EPA
+         AIF   ('&PCID' EQ '').PCE02
+         DC    A(&PCID)              .PC routing routing code
+         DC    A(0)                  .-reserved
+.*
+.MODE    ANOP  ,
+         AIF   ('&MODE' EQ 'SRB').SRBM
+         AIF   ('&MODE' NE 'TCB').PCE03
+         DC    XL1'80'               .only TCB callers allowed
+         AGO   .SAF
+.*
+.SRBM    ANOP  ,
+         DC    XL1'40'               .TCB/SRB callers allowed
+.*
+.SAF     ANOP  ,
+         AIF   ('&SAF' EQ '').PCE04
+         AIF   ('&SAF' EQ 'CALL').RACF05
+         AIF   ('&SAF' EQ 'NOCALL').RACF10
+         AGO   .PCE04
+.*
+.RACF05  ANOP  ,
+         DC    XL1'80'               .SAF=CALL
+         AGO   .RESRV
+.*
+.RACF10  ANOP  ,
+         DC    XL1'40'               .SAF=NOCALL
+.*
+.RESRV   ANOP  ,
+         DC    AL2(0)                .-reserved
+.*
+.PCNAME  ANOP  ,
+         DC    CL8'&EP'              .PC routine name
+         MEXIT ,
+.*
+.**      TYPE=FINAL
+.*
+.PCEFINI ANOP  ,
+         DS    0F                    .
+         DC    XL4'FFFFFFFF'         .final table entry
+         MEXIT ,
+.*
+.**      DSECT=YES
+.*
+.PCELIST ANOP  ,
+XPC      DSECT ,
+XPCEPA   DS    A                     .PC routine EPA
+XPCPCID  DS    A                     .PC routing routing code
+XPCRVR0  DS    A                     .-reserved
+*
+XPCMODE  DS    XL1                   .MODE
+XPC@TCBM EQU   X'80'                  -TCB-mode
+XPC@SRBM EQU   X'40'                  -SRB-mode
+*
+XPCSAF   DS    XL1                   .SAF
+XPC@CALL EQU   X'80'                  -CALL
+XPC@NCAL EQU   X'40'                  -NOCALL
+*
+XPC@RSV2 DS    AL2                   .-available
+*
+XPCEPNAM DS    CL8                   .PC routine name
+         DS    0D
+XPC@SIZE EQU   *-XPC                 .entry size
+         MEXIT ,
+.*
+.**      Macro Notes
+.*
+.PCE00   MNOTE 8,'*** PCE Invalid DSECT operand specified'
+         MEXIT ,
+.PCE01   MNOTE 8,'*** PCE Invalid EP operand specified'
+         MEXIT ,
+.PCE02   MNOTE 8,'*** PCE Invalid PCID operand specified'
+         MEXIT ,
+.PCE03   MNOTE 8,'*** PCE Invalid MODE operand specified'
+         MEXIT ,
+.PCE04   MNOTE 8,'*** PCE Invalid SAF operand specified'
+         MEXIT ,
+.*--------------------------------------------------------------------*
+.*                                                                    *
+.*       Generate CMD command table                                   *
+.*                                                                    *
+.*-------+---------+---------+---------+---------+---------+---------+*
+.GENCMD  ANOP  ,
+         AIF   ('&DSECT' EQ 'YES').CMDLIST
+         AIF   ('&DSECT' NE 'NO').CMD00
+         AIF   ('&TYPE' EQ 'INITIAL').CMDINIT
+         AIF   ('&TYPE' EQ 'FINAL').CMDFINI
+         AIF   ('&TYPE' EQ 'ENTRY').CMDENTY
+         AGO   .CMD01
+.*
+.**      TYPE=INITIAL
+.*
+.CMDINIT ANOP  ,
+         DS    0F                    .initial table entry
+         MEXIT ,
+.*
+.**      TYPE=ENTRY
+.*
+.CMDENTY ANOP  ,
+         DS    0F
+         AIF   ('&EP' EQ '').CMD01   .
+         DC    A(&EP)                .EPA
+         AIF   ('&LENGTH' EQ '').CMD02
+         DC    AL2(0)                .reserved
+         DC    AL2(&LENGTH)          .length
+         AIF   ('&COMMAND' EQ '').CMD03
+         DC    CL16&COMMAND          .command
+         MEXIT ,
+.*
+.**      TYPE=FINAL
+.*
+.CMDFINI ANOP  ,
+         DS    0F                    .
+         DC    XL4'FFFFFFFF'         .final table entry
+         MEXIT ,
+.*
+.**      DSECT=YES
+.*
+.CMDLIST ANOP  ,
+COMMAND  DSECT ,
+CMDEPA   DS    A                     .EPA
+CMDRSV   DS    AL2                   .-reserved
+CMDLEN   DS    AL2                   .length
+CMDTEXT  DS    CL16                  .command
+CMD@SZE  EQU   *-COMMAND             .entry size
+         MEXIT ,
+.*
+.**      Macro Notes
+.*
+.CMD00   MNOTE 8,'*** CMD invalid DSECT operand specified'
+         MEXIT ,
+.CMD01   MNOTE 8,'*** CMD invalid EP operand specified'
+         MEXIT ,
+.CMD02   MNOTE 8,'*** CMD invalid LENGTH operand specified'
+         MEXIT ,
+.CMD03   MNOTE 8,'*** CMD invalid COMMAND operand specified'
+         MEXIT ,
+.*--------------------------------------------------------------------*
+.*                                                                    *
+.*       Generate DB2 listener table                                  *
+.*                                                                    *
+.*-------+---------+---------+---------+---------+---------+---------+*
+.GENDB2  ANOP  ,
+         AIF   ('&DSECT' EQ 'YES').DB2LIST
+         AIF   ('&DSECT' NE 'NO').DB200
+         AIF   ('&TYPE' EQ 'INITIAL').DB2INIT
+         AIF   ('&TYPE' EQ 'FINAL').DB2FINI
+         AIF   ('&TYPE' EQ 'ENTRY').DB2ENTY
+         AGO   .DB201
+.*
+.**      TYPE=INITIAL
+.*
+.DB2INIT ANOP  ,
+         DS    0F                    .initial table entry
+         MEXIT ,
+.*
+.**      TYPE=ENTRY
+.*
+.DB2ENTY ANOP  ,
+         DS    0F
+         AIF   ('&EP' EQ '').DB201   .
+         DC    A(&EP)                .EPA
+         DC    A(0)                  .reserved
+         MEXIT ,
+.*
+.**      TYPE=FINAL
+.*
+.DB2FINI ANOP  ,
+         DS    0F                    .
+         DC    XL4'FFFFFFFF'         .final table entry
+         MEXIT ,
+.*
+.**      DSECT=YES
+.*
+.DB2LIST ANOP  ,
+DB2      DSECT ,
+DB2EPA   DS    A                     .EPA
+DB2RSV1  DS    A                     .-reserved
+DB2@SIZE EQU   *-DB2                 .entry size
+         MEXIT ,
+.*
+.**      Macro Notes
+.*
+.DB201   MNOTE 8,'*** DB2 invalid EP operand specified'
+         MEXIT ,
+.*--------------------------------------------------------------------*
+.*                                                                    *
+.*       Generate ENF listener table                                  *
+.*                                                                    *
+.*-------+---------+---------+---------+---------+---------+---------+*
+.GENENF  ANOP  ,
+         AIF   ('&DSECT' EQ 'YES').ENFLIST
+         AIF   ('&DSECT' NE 'NO').ENF00
+         AIF   ('&TYPE' EQ 'INITIAL').ENFINIT
+         AIF   ('&TYPE' EQ 'FINAL').ENFFINI
+         AIF   ('&TYPE' EQ 'ENTRY').ENFENTY
+         AGO   .ENF01
+.*
+.**      TYPE=INITIAL
+.*
+.ENFINIT ANOP  ,
+         DS    0F                    .initial table entry
+         MEXIT ,
+.*
+.**      TYPE=ENTRY
+.*
+.ENFENTY ANOP  ,
+         DS    0F
+         AIF   ('&CODE' EQ '').ENF01
+         DC    AL4(&CODE)            .event code
+         AIF   ('&DATA' EQ '').ENF02
+         DC    AL4(&DATA)            .event data map length
+         MEXIT ,
+.*
+.**      TYPE=FINAL
+.*
+.ENFFINI ANOP  ,
+         DS    0F                    .
+         DC    XL4'FFFFFFFF'         .final table entry
+         MEXIT ,
+.*
+.**      DSECT=YES
+.*
+.ENFLIST ANOP  ,
+ENF      DSECT ,
+ENFENTY  DS    0F
+ENFCODE  DS    AL4                   .event code
+ENFMLEN  DS    AL4                   .event data map length
+ENF@SIZE EQU   *-ENF                 .entry size
+         MEXIT ,
+.*
+.**      Macro Notes
+.*
+.ENF01   MNOTE 8,'*** ENF invalid CODE operand specified'
+         MEXIT ,
+.ENF02   MNOTE 8,'*** ENF invalid MAPLEN operand specified'
+         MEXIT ,
+.*--------------------------------------------------------------------*
+.*                                                                    *
+.*       Generate XCF listener table                                  *
+.*                                                                    *
+.*-------+---------+---------+---------+---------+---------+---------+*
+.GENXCF  ANOP  ,
+         AIF   ('&DSECT' EQ 'YES').XCFLIST
+         AIF   ('&DSECT' NE 'NO').XCF00
+         AIF   ('&TYPE' EQ 'INITIAL').XCFINIT
+         AIF   ('&TYPE' EQ 'FINAL').XCFFINI
+         AIF   ('&TYPE' EQ 'ENTRY').XCFENTY
+         AGO   .XCF01
+.*
+.**      TYPE=INITIAL
+.*
+.XCFINIT ANOP  ,
+         DS    0F                    .initial table entry
+         MEXIT ,
+.*
+.**      TYPE=ENTRY
+.*
+.XCFENTY ANOP  ,
+         DS    0F
+         AIF   ('&EP' EQ '').XCF01   .
+         DC    A(&EP)                .EPA
+         DC    A(0)                  .reserved
+         MEXIT ,
+.*
+.**      TYPE=FINAL
+.*
+.XCFFINI ANOP  ,
+         DS    0F                    .
+         DC    XL4'FFFFFFFF'         .final table entry
+         MEXIT ,
+.*
+.**      DSECT=YES
+.*
+.XCFLIST ANOP  ,
+XCF      DSECT ,
+XCFEPA   DS    A                     .EPA
+XCFRSV1  DS    A                     .-reserved
+XCF@SIZE EQU   *-XCF                 .entry size
+         MEXIT ,
+.*
+.**      Macro Notes
+.*
+.XCF01   MNOTE 8,'*** XCF invalid EP operand specified'
+         MEXIT ,
+.*--------------------------------------------------------------------*
+.*                                                                    *
+.*       Generate SVC listener table                                  *
+.*                                                                    *
+.*-------+---------+---------+---------+---------+---------+---------+*
+.GENSVC  ANOP  ,
+         AIF   ('&DSECT' EQ 'YES').SVCLIST
+         AIF   ('&DSECT' NE 'NO').SVC00
+         AIF   ('&TYPE' EQ 'INITIAL').SVCINIT
+         AIF   ('&TYPE' EQ 'FINAL').SVCFINI
+         AIF   ('&TYPE' EQ 'ENTRY').SVCENTY
+         AGO   .SVC01
+.*
+.**      TYPE=INITIAL
+.*
+.SVCINIT ANOP  ,
+         DS    0F                    .initial table entry
+         MEXIT ,
+.*
+.**      TYPE=ENTRY
+.*
+.SVCENTY ANOP  ,
+         DS    0F
+         AIF   ('&EP' EQ '').SVC01   .
+         DC    A(&EP)                .EPA
+         DC    A(0)                  .reserved
+         MEXIT ,
+.*
+.**      TYPE=FINAL
+.*
+.SVCFINI ANOP  ,
+         DS    0F                    .
+         DC    XL4'FFFFFFFF'         .final table entry
+         MEXIT ,
+.*
+.**      DSECT=YES
+.*
+.SVCLIST ANOP  ,
+SVC      DSECT ,
+SVCEPA   DS    A                     .EPA
+SVCRSV1  DS    A                     .-reserved
+SVC@SIZE EQU   *-SVC                 .entry size
+         MEXIT ,
+.*
+.**      Macro Notes
+.*
+.SVC01   MNOTE 8,'*** SVC invalid EP operand specified'
+         MEXIT ,
+.*--------------------------------------------------------------------*
+.*                                                                    *
+.*       Generate EOT listener table                                  *
+.*                                                                    *
+.*-------+---------+---------+---------+---------+---------+---------+*
+.GENEOT  ANOP  ,
+         AIF   ('&DSECT' EQ 'YES').EOTLIST
+         AIF   ('&DSECT' NE 'NO').EOT00
+         AIF   ('&TYPE' EQ 'INITIAL').EOTINIT
+         AIF   ('&TYPE' EQ 'FINAL').EOTFINI
+         AIF   ('&TYPE' EQ 'ENTRY').EOTENTY
+         AGO   .EOT01
+.*
+.**      TYPE=INITIAL
+.*
+.EOTINIT ANOP  ,
+         DS    0F                    .initial table entry
+         MEXIT ,
+.*
+.**      TYPE=ENTRY
+.*
+.EOTENTY ANOP  ,
+         DS    0F
+         AIF   ('&EP' EQ '').EOT01   .
+         DC    A(&EP)                .EPA
+         DC    A(0)                  .reserved
+         MEXIT ,
+.*
+.**      TYPE=FINAL
+.*
+.EOTFINI ANOP  ,
+         DS    0F                    .
+         DC    XL4'FFFFFFFF'         .final table entry
+         MEXIT ,
+.*
+.**      DSECT=YES
+.*
+.EOTLIST ANOP  ,
+EOT      DSECT ,
+EOTEPA   DS    A                     .EPA
+EOTRSV1  DS    A                     .-reserved
+EOT@SIZE EQU   *-EOT                 .entry size
+         MEXIT ,
+.*
+.**      Macro Notes
+.*
+.EOT01   MNOTE 8,'*** EOT invalid EP operand specified'
+         MEXIT ,
+.*--------------------------------------------------------------------*
+.*                                                                    *
+.*       Generate MSG listener table                                  *
+.*                                                                    *
+.*-------+---------+---------+---------+---------+---------+---------+*
+.GENMSG  ANOP  ,
+         AIF   ('&DSECT' EQ 'YES').MSGLIST
+         AIF   ('&DSECT' NE 'NO').MSG00
+         AIF   ('&TYPE' EQ 'INITIAL').MSGINIT
+         AIF   ('&TYPE' EQ 'FINAL').MSGFINI
+         AIF   ('&TYPE' EQ 'ENTRY').MSGENTY
+         AGO   .MSG01
+.*
+.**      TYPE=INITIAL
+.*
+.MSGINIT ANOP  ,
+         DS    0F                    .initial table entry
+         MEXIT ,
+.*
+.**      TYPE=ENTRY
+.*
+.MSGENTY ANOP  ,
+         DS    0F
+         AIF   ('&EP' EQ '').MSG01   .
+         DC    A(&EP)                .EPA
+         DC    A(0)                  .reserved
+         MEXIT ,
+.*
+.**      TYPE=FINAL
+.*
+.MSGFINI ANOP  ,
+         DS    0F                    .
+         DC    XL4'FFFFFFFF'         .final table entry
+         MEXIT ,
+.*
+.**      DSECT=YES
+.*
+.MSGLIST ANOP  ,
+MSG      DSECT ,
+MSGEPA   DS    A                     .EPA
+MSGRSV1  DS    A                     .-reserved
+MSG@SIZE EQU   *-MSG                 .entry size
+         MEXIT ,
+.*
+.**      Macro Notes
+.*
+.MSG01   MNOTE 8,'*** MSG invalid EP operand specified'
+         MEXIT ,
+.*--------------------------------------------------------------------*
+.*                                                                    *
+.*       Generate EOM listener table                                  *
+.*                                                                    *
+.*-------+---------+---------+---------+---------+---------+---------+*
+.GENEOM  ANOP  ,
+         AIF   ('&DSECT' EQ 'YES').EOMLIST
+         AIF   ('&DSECT' NE 'NO').EOM00
+         AIF   ('&TYPE' EQ 'INITIAL').EOMINIT
+         AIF   ('&TYPE' EQ 'FINAL').EOMFINI
+         AIF   ('&TYPE' EQ 'ENTRY').EOMENTY
+         AGO   .EOM01
+.*
+.**      TYPE=INITIAL
+.*
+.EOMINIT ANOP  ,
+         DS    0F                    .initial table entry
+         MEXIT ,
+.*
+.**      TYPE=ENTRY
+.*
+.EOMENTY ANOP  ,
+         DS    0F
+         AIF   ('&EP' EQ '').EOM01   .
+         DC    A(&EP)                .EPA
+         DC    A(0)                  .reserved
+         MEXIT ,
+.*
+.**      TYPE=FINAL
+.*
+.EOMFINI ANOP  ,
+         DS    0F                    .
+         DC    XL4'FFFFFFFF'         .final table entry
+         MEXIT ,
+.*
+.**      DSECT=YES
+.*
+.EOMLIST ANOP  ,
+EOM      DSECT ,
+EOMEPA   DS    A                     .EPA
+EOMRSV1  DS    A                     .-reserved
+EOM@SIZE EQU   *-EOM                 .entry size
+         MEXIT ,
+.*
+.**      Macro Notes
+.*
+.EOM00   MNOTE 8,'*** EOM invalid DSECT operand specified'
+         MEXIT ,
+.EOM01   MNOTE 8,'*** EOM invalid EP operand specified'
+         MEND

@@ -1,0 +1,1409 @@
+XPCINI   CSECT
+*/********************************************************************/
+*/*                                                                  */
+*/* Name:        XPCINI                                              */
+*/*                                                                  */
+*/* Function:    ZXPC server initialization routine                  */
+*/*                                                                  */
+*/* Description: Receives control in the Master Scheduler address    */
+*/*              space to initialize the ZXPC server environment.    */
+*/*                                                                  */
+*/* Environment: TCB-mode                                            */
+*/*              Unlocked                                            */
+*/*              Enabled for I/O and External interrupts             */
+*/*                                                                  */
+*/* Implementation:                                                  */
+*/*              Issue the MODIFY LLA,REFRESH command or use         */
+*/*              SETPROG LNKLST,UPDATE,ASID=1 command to update      */
+*/*              the LNKLST prior to issuing the MVS SETSSI ADD      */
+*/*              command.                                            */
+*/*                                                                  */
+*/* Activation:  ZXPC can be defined dynamically by issuing the      */
+*/*              SETSSI ADD command or by defining it in PARMLIB     */
+*/*              member IEFSSNxx.                                    */
+*/*                                                                  */
+*/* SETSSI ADD command implementation:                               */
+*/*              SETSSI ADD,SUB=ZXPC,                                */
+*/*              I=ZXPCINI,P='SRV=ZXPCSRV,SAF=XPCCLASS'              */
+*/*                                                                  */
+*/* IEFSSNxx PARMLIB member implementation:                          */
+*/*              SUBSYS SUBNAME(ZXPC)                                */
+*/*                     INITRTN(ZXPCINI)                             */
+*/*                     INITPARM('SRV=ZXPCXPC,SAF=XPCCLASS')         */
+*/*                                                                  */
+*/* Initialization Parameters:                                       */
+*/* SRV={module} Specifies the ZXPC PC routine router load module    */
+*/*              name. If not specified, the default is SRV=ZXPCSRV. */
+*/*              ZXPCSRV contains all the ZXPC server PC routines.   */
+*/*              The load module is added to the dynmaic-LPA using   */
+*/*              the MVS CSVDYLPA service macro as follows:          */
+*/*              - Page fixed dynamic-LPA                            */
+*/*              - Entire module write protected                     */
+*/*                                                                  */
+*/* SAF={class}  Specifies the security server class that ZXPC       */
+*/*              will use when making security authorization checks. */
+*/*              If not specified the default is SAF=XPCCLASS.       */
+*/*                                                                  */
+*/*              Specify SAF=NOCALL to bypass all security checks.   */
+*/*              CAUTION: Use of SAF=NOCALL allows unauthorized      */
+*/*                       personnel access to these PC calls which   */
+*/*                       if used inappropriately may compromise     */
+*/*                       system integrity.                          */
+*/*                                                                  */
+*/* CMP={NO|YES} Specifies if WTO message text compression is active */
+*/*              or inactive. CMP=NO does not compress the message   */
+*/*              text. CMP=YES removes message text duplicate blanks.*/
+*/*              If not specified the default is CMP=YES.            */
+*/*                                                                  */
+*/* CON={NO|YES} Specifies if the SETCON MN,JOBNAMES=(ON,LOG)        */
+*/*              command should be internally issued to allow the    */
+*/*              ZXPC server to listen for monitored messages.       */
+*/*              If not specified the default is CON=NO.             */
+*/*                                                                  */
+*/* DMP={NO|YES} Specifies if SVC dumps should be taken to report    */
+*/*              abnormal termination errors. DMP=YES dumps service  */
+*/*              requests calls that terminate abnormally.           */
+*/*              If not specified the default is DMP=NO.             */
+*/*                                                                  */
+*/* ENQ={NO|YES} Specifies the ENQ/DEQ serialization option.         */
+*/*              ENQ=YES issues shared ENQ on major SYSIEFSD with    */
+*/*              minor of Q10. ENQ=NO bypasses serialization when    */
+*/*              scanning the CSCB control block chain.              */
+*/*              If not specified the default is ENQ=NO.             */
+*/*                                                                  */
+*/* SUP={NO|YES} Specifies if listener routines are allowed to       */
+*/*              receive control in supervisor state and PSW key 0.  */
+*/*              SUP=NO, the default, gives control to triggered     */
+*/*              listener routines in problem state with PSW key 8.  */
+*/*                                                                  */
+*/* TRC={ON|OFF} Specifies if internal server tracing is ON or OFF.  */
+*/*              TRC=ON activates internal tracing and TRC=OFF, the  */
+*/*              default, deactivates tracing.                       */
+*/*                                                                  */
+*/* MODE={PROD|TEST}                                                 */
+*/*              Specifies the ZXPC server execution mode.           */
+*/*              When MODE=TEST is specified, system events are only */
+*/*              triggered on behalf of jobs, STCs, submitted by the */
+*/*              TSO user specified by the UID=userID initialization */
+*/*              option. If not specified, the default is MODE=PROD. */
+*/*                                                                  */
+*/* UID=userID   Specifies the testing environment TSO userID.       */
+*/*              In conjunction with option MODE=TEST, it allows you */
+*/*              to only trap system events that are triggered by    */
+*/*              jobs and started tasks submitted by the user.       */
+*/*                                                                  */
+*/* Input Regs:  R1  Parmlist                                        */
+*/*                  Word 1 SSCT address                             */
+*/*                  Word 2 JSIPL address                            */
+*/*              R13 Savearea address                                */
+*/*              R14 Return address                                  */
+*/*              R15 Entry point address                             */
+*/*                                                                  */
+*/* Regs Usage:  R7  Parmlist                                        */
+*/*              R8  JSIPL address                                   */
+*/*              R9  SSCT address                                    */
+*/*              R11 ZXVT address                                    */
+*/*              R12 DSA address                                     */
+*/*              R10 Base address                                    */
+*/*              R13 Save area address                               */
+*/*                                                                  */
+*/* Output Regs: R0  Reason code                                     */
+*/*              R15 Return code                                     */
+*/*                                                                  */
+*/* Attributes:  TCB-mode                                            */
+*/*              Primary mode                                        */
+*/*              Key 0                                               */
+*/*              Supervisor state                                    */
+*/*              LNKLST-resident                                     */
+*/*              Reentrant                                           */
+*/*                                                                  */
+*/* Copyright:   Ben Marino. 2021 - 2022 (unpublished)               */
+*/*                                                                  */
+*/********************************************************************/
+*---------------------------CHANGE LOG--------------------------------*
+*                                                                     *
+* ID    Rel    Date       Author        Comments                      *
+*---------------------------------------------------------------------*
+* @01 | V1R1 | 12072021 | Ben Marino  | Initial version               *
+*     |      |          |             |                               *
+*     |      |          |             |                               *
+***********************************************************************
+*--------+---------+---------+---------+---------+---------+---------+*
+XPCINI   AMODE 31
+XPCINI   RMODE ANY
+         COPY  ZZGBL
+         USING XPCINI,R15              entry
+         STM   R14,R12,GPR@R14(R13)    save caller's regs
+         B     INI0000                 branch
+         ZZMAC GEN=MID,DSECT=NO        module ID
+*
+INI0000  DS    0H
+         DROP  R15
+         LR    R10,R15                 base
+         USING XPCINI,R10              addressability
+         LR    R7,R1                   protect parm reg
+         L     R9,0(,R7)               SSCT address
+         USING SSCT,R9                 set addressability
+         L     R8,4(,R7)               JSIPL address
+         USING JSIPL,R8                set addressability
+*
+**       Obtain dynamic storage area
+*
+         SPKA  X'80'(0)                probelem key
+         STORAGE OBTAIN,LOC=ANY,COND=NO,CALLRKY=YES,                   +
+               LENGTH=DSA@SZE,SP=130,LINKAGE=SYSTEM
+         SPKA  0(0)                    supervisor key
+         LR    R12,R1
+         USING DSA,R12                 set addressability
+         LA    R3,DSA@SZE              DSA size
+         LR    R2,R1                   copy address
+         XR    R15,R15                 zero
+         MVCL  R2,R14                  scrub DSA
+         ST    R13,GPR@BWD(,R1)        chain
+         ST    R1,GPR@FWD(,R13)         save,
+         LR    R13,R1                    areas.
+         XC    DSARC,DSARC             zero RC
+*
+**       Locate previous server instance
+*
+         USING PSA,0
+         L     R3,FLCCVT               CVT address
+         USING CVT,R3                  set addressability
+         L     R3,CVTMSER              MSAS base work area
+         USING BASE,R3                 set addressability
+         CLC   MIDMSAS,=CL4'ASXB'      MSAS=ASXB?
+         BE    INI0010                 yes
+         ICM   R3,15,BAMTVTCB          IEEVIPL common TCB?
+         BZ    INI0010                 no
+         CLC   MIDMSAS,=CL4'BASE'      MSAS=BASE?
+         BE    INI0020                 yes
+         MVC   DSARSN,=AL4(RSN116)     set RSN
+         B     INIABEND                ABEND
+*
+INI0010  DS    0H
+         L     R3,BAASCB               MSAS ASCB address
+         USING ASCB,R3                 set addressability
+         L     R3,ASCBASXB             ASXB address
+         USING ASXB,R3                 set addressability
+         L     R3,ASXBFTCB             IEEVIPL TCB
+*
+INI0020  DS    0H
+         USING TCB,R3                  set addressability
+         ICM   R11,15,TCBFSA           ZXVT init?
+         BZ    INI0040                 no
+         USING ZXVT,R11                set addressability
+         CLC   ZXVTID,=CL4'ZXVT'       valid indeed?
+         BNE   INI0040                 no
+*
+**       Deinstall previous server instance
+*
+         ZZCALL SR=ENFDEL              delete ENF events
+         TM    ZXVTFLG1,ZXVT@CPL       cell pool built?
+         BZ    INI0030                 no
+         ICM   R2,15,ZXVTCPID          cell pool ID init?
+         BZ    INI0030                 no
+         XC    ZXVTCPID,ZXVTCPID       zero cell pool ID
+         CPOOL DELETE,CPID=(2),LINKAGE=SYSTEM
+*
+INI0030  DS    0H
+         ICM   R2,15,ZXVTSIZE          ZXVT size init?
+         BZ    INI0040                 no
+         XC    TCBFSA,TCBFSA           deactivate instance
+         MVC   DSAPSLX,ZXVTSLXV        previous instance SLX
+         DROP  R3,R11
+         STORAGE RELEASE,COND=YES,                                     +
+               ADDR=(11),LENGTH=(2),SP=245,LINKAGE=SYSTEM
+         OI    DSAFLG1,DSA@RES         previous instance freed
+*
+**       Validity check subsystem name
+*
+INI0040  DS    0H
+         CLI   SSCTSNAM+3,BLANK        4-char subsystem name?
+         BNE   INI0050                 yes, carry on
+         ZZWTO MID=XPC004E             no, error
+         ZZWTO MID=XPC005E             initialization failed
+         MVC   DSARC,=AL4(RC12)        error RC
+         B     INIEXIT                 exit
+*
+**       Storage obtain vector table
+*
+INI0050  DS    0H
+         STORAGE OBTAIN,LOC=ANY,COND=NO,                               +
+               LENGTH=ZXVT@SZE,SP=245,LINKAGE=SYSTEM
+         LR    R11,R1
+         USING ZXVT,R11                set addressability
+         LA    R3,ZXVT@SZE             ZXVT size
+         LR    R2,R1                   copy address
+         XR    R15,R15                 zero
+         MVCL  R2,R14                  scrub ZXVT
+         MVC   ZXVTID,=CL4'ZXVT'       ID
+         ST    R9,ZXVTSSCT             init SSCT address
+         ST    R11,ZXVTZXVT            init ZXVT address
+         ST    R11,SSCTSUSE            init ZXVT address
+         MVC   ZXVTSUBN,SSCTSNAM       init subsystem name
+         MVC   ZXVTSIZE,=AL4(ZXVT@SZE) init ZXVT size
+         ZZCALL SR=XVTINI              init ZXVT data fields
+         ZZTRC INI=A,SWKEY=NO,MID=MIDNAME,MOD=XPCINI
+*
+**       Issue init in progress msg
+*
+         ZZWTO MID=XPC000I
+         TM    DSAFLG1,DSA@RES         previous instance released?
+         BZ    INI0100                 no
+         ZZWTO MID=XPC008I             yes, issue msg
+*
+**       Parse INITPARM parameters
+*
+INI0100  DS    0H
+         ZZCALL SR=PARINI              call subroutine
+         LTR   R15,R15                 successful?
+         BZ    INI0200                 yes, carry on
+         MVC   DSARC,=AL4(RC8)         error RC
+         ZZTRC INI=B,SWKEY=NO          trace
+         B     INIEXIT                 exit
+*
+**       Serialize CSVDYLPA request
+*
+INI0200  DS    0H
+         MVC   DSAEQDQ(CSVENQL),CSVENQ init listform
+         ENQ   MF=(E,DSAEQDQ)          serialize resource
+         OI    DSAFLG1,DSA@ENQ         set ENQ indicator
+         ZZTRC INI=C,SWKEY=NO          trace
+*
+**       Delete ZXPC module from dynamic-LPA
+*
+         LA    R2,DSADYLPA
+         USING LPMED,R2
+         XC    DSADYLPA(LPMED_LEN),DSADYLPA
+         MVC   LPMEDNAME,ZXVTZXPC
+         CSVDYLPA REQUEST=DELETE,                                      +
+               MODINFO=(2),                                            +
+               TYPE=CURRENT,           delete current instance         +
+               NUMMOD=LMODDCT,         module delete count             +
+               SECMODCHECK=YES,        do RACF FACILITY class check    +
+               RETCODE=ZXVTYLRC,       return RC here                  +
+               RSNCODE=ZXVTYLRS,       return RSN here                 +
+               MF=(E,DYLPAL)           listform
+         CLC   ZXVTYLRC,=AL4(RC0)      successful?
+         BE    INI0400                 yes, carry on
+         CLC   ZXVTYLRC,=AL4(RC4)      warning RC?
+         BNE   INI0300                 no, issue error msg
+         CLC   ZXVTYLRS,LRSN401        successful?
+         ZZTRC INI=D,SWKEY=NO          trace
+         BE    INI0400                 no, carry on
+*
+INI0300  DS    0H
+         ZZWTO MID=XPC003E,            issue error msg                 +
+               V1==CL3'DEL',           show function                   +
+               V2=ZXVTZXPC,            show module                     +
+               V3=ZXVTYLRC,            show RC                         +
+               V4=ZXVTYLRS             show RSN
+*
+**       Add ZXPC module to dynamic-LPA
+*
+INI0400  DS    0H
+         L     R3,FLCCVT               CVT
+         USING CVT,R3                  set addressability
+         LA    R2,DSADYLPA
+         USING LPMEA,R2
+         XC    DSADYLPA(LPMEA_LEN),DSADYLPA
+         MVC   LPMEANAME,ZXVTZXPC
+         OI    LPMEAINPUTFLAGS0,LPMEAFIXED
+         OI    LPMEAINPUTFLAGS0,LPMEASTORAGEOWNERSYSTEM
+         CSVDYLPA REQUEST=ADD,                                         +
+               MODINFO=(2),                                            +
+               MODINFOTYPE=MEMBERLIST, by member name                  +
+               BYADDR=NO,              fetch required                  +
+               NUMMOD=LMODACT,         module add count                +
+               APFREQUIRED=YES,        APF-authorized                  +
+               SECMODCHECK=YES,        do RACF FACILITY class check    +
+               DCBPTR=CVTLINK,         search link list                +
+               REQUESTOR=LMODREQ,      requesting subsysytem ID        +
+               RETCODE=ZXVTYARC,       return RC here                  +
+               RSNCODE=ZXVTYARS,       return RSN here                 +
+               MF=(E,DYLPAL)           listform
+         DROP  R3
+*
+**       Release CSVDYLPA serialization
+*
+         MVC   DSAEQDQ(CSVDEQL),CSVDEQ init listform
+         DEQ   MF=(E,DSAEQDQ)          release serialization
+         NI    DSAFLG1,XFF-DSA@ENQ     reset ENQ indicator
+         CLC   ZXVTYARC,=AL4(RC0)      CSVDYLPA successful?
+         BE    INI0500                 yes
+*
+**       Issued initialization failed msgs
+*
+         ZZWTO MID=XPC003E,            LPA error msg                   +
+               V1==CL3'ADD',           show function                   +
+               V2=ZXVTZXPC,            show RC                         +
+               V3=ZXVTYARC,            show RC                         +
+               V4=ZXVTYARS             show RSN
+         ZZWTO MID=XPC005E             issue error msg
+         MVC   DSARC,=AL4(RC8)         error RC
+         B     INIEXIT                 exit
+*
+INI0500  DS    0H
+         MVC   ZXVTLPTK,LPMEADELETETOKEN  copy delete token
+         MVC   ZXVTXSRV,LPMEALOADPOINTADDR  copy LMOD address
+         OI    ZXVTFLG1,ZXVT@LPA       ZXPC loaded indicator
+         ZZWTO MID=XPC002I,V1=ZXVTZXPC issue successful msg
+*
+**       Set authorized authorization index
+*
+         AXEXT ,                       extract AX
+         ST    R0,ZXVTENAX             save it
+         LA    R0,1                    request AX=1
+         AXSET AX=(0)                  set it
+         ST    R15,ZXVTAXST            save RC
+         OI    DSAFLG1,DSA@AXV         AX restore required
+         ZZTRC INI=E,SWKEY=NO          trace
+*
+**       Reserve System Linkage Index
+*
+         ICM   R2,15,ZXVTSLXV          SLX init?
+         BNZ   INI0600                 yes
+         LA    R2,1
+         ST    R2,DSALXCNT             SLX=1
+         MVC   DSAPLST(LXR@SZE),LXRES
+         LXRES LXLIST=DSALXRES,MF=(E,DSAPLST)
+         ST    R15,ZXVTLXRS            save RC
+         MVC   ZXVTSLXV,DSALXVAL       copy SLX value
+         ZZTRC INI=F,SWKEY=NO          trace
+*
+**       Define Entry Table Entry
+*
+INI0600  DS    0H
+         L     R2,ZXVTXSRV             XPCSRV
+         LA    R5,DSAPLST              ETD header
+         LA    R5,ETDLEN(,R5)          ETD entry
+         USING ETDELE,R5               set addressability
+         MVC   DSAPLST(DEF@ALLZ),DEFINIT
+         ETDEF TYPE=SET,ETEADR=(5),                                    +
+               ROUTINE=(2),            PC routine EPA                  +
+               PC=STACKING,            stacking PC                     +
+               SASN=NEW,               SASN=PASN                       +
+               RAMODE=31,              AMODE=31                        +
+               ASCMODE=PRIMARY,        execute in primary space        +
+               SSWITCH=NO,             CR1 & CR7 set to primary        +
+               STATE=SUPERVISOR,       Supervisor state                +
+               AKM=(0:15),             all callers are welcome         +
+               EKM=(0:15)              PKM key mask
+         ST    R15,ZXVTETDF            save RC
+         ZZTRC INI=G,SWKEY=NO          trace
+*
+**       Build Entry Table Descriptor
+*
+         LA    R5,DSAPLST              ETD header
+         ETCRE ENTRIES=(5)             create PC routine
+         ST    R0,ZXVTETKN             Save ET token
+         ST    R15,ZXVTETCR            save RC
+         ZZTRC INI=H,SWKEY=NO          trace
+*
+**       Connect LX to Entry Table
+*
+         LA    R2,1
+         ST    R2,DSAETCNT             ETE=1
+         MVC   DSAETTKN,ZXVTETKN       ETE token
+         ST    R2,DSALXCNT             SLX=1
+         MVC   DSALXVAL,ZXVTSLXV       SLX value
+         MVC   DSAPLST(ETCON@SZ),ETCON
+         LA    R3,DSAETCON             ETE list
+         LA    R4,DSALXRES             SLX list
+         ETCON TKLIST=(3),LXLIST=(4),MF=(E,DSAPLST)
+         ST    R15,ZXVTETCO            save RC
+         MVC   ZXVTPCNM,ZXVTSLXV       init PC number
+         OI    ZXVTFLG1,ZXVT@XPC       stacking-PC initialized
+         ZZTRC INI=I,SWKEY=NO          trace
+*
+**       Delete Server command prefix
+*
+         MVI   DSAPREFX,BLANK
+         MVC   DSAPREFX+1(7),DSAPREFX  clear prefix
+         MVC   DSAOWNER,DSAPREFX       clear owner
+         MVC   DSAPREFX(4),SSCTSNAM    init prefix
+         MVC   DSAOWNER(4),SSCTSNAM    init owner
+         CPF   REQUEST=DELETE,                                         +
+               PREFIX=DSAPREFX,                                        +
+               MF=(E,DSACPF)           delete prefix
+         ST    R15,ZXVTDLRC            save RC
+         ST    R0,ZXVTDLRS             save RSN
+         ZZTRC INI=J,SWKEY=NO          trace
+*
+**       Define Server command prefix
+*
+         CPF   REQUEST=DEFINE,                                         +
+               OWNER=DSAOWNER,         prefix owner                    +
+               PREFIX=DSAPREFX,        prefix name                     +
+               SCOPE=SYSTEM,           this system only                +
+               REMOVE=NO,              keep prefix with commands       +
+               FAILDISP=RETAIN,        keep it defined until deleted   +
+               MF=(E,DSACPF)           define prefix
+         ST    R15,ZXVTADRC            save RC
+         ST    R0,ZXVTADRS             save RSN
+         LTR   R15,R15                 successful?
+         BZ    INI0700                 yes
+         ZZWTO MID=XPC010E,V1=ZXVTADRC,V2=ZXVTADRS
+*
+**       Complete ZXPC server initialization
+*
+INI0700  DS    0H
+         L     R3,FLCCVT               CVT address
+         USING CVT,R3                  set addressability
+         L     R3,CVTMSER              MSAS base work area
+         USING BASE,R3                 set addressability
+         CLC   MIDMSAS,=CL4'ASXB'      MSAS=ASXB?
+         BE    INI0710                 yes
+         ICM   R3,15,BAMTVTCB          IEEVIPL common TCB?
+         BZ    INI0710                 no
+         CLC   MIDMSAS,=CL4'BASE'      MSAS=BASE?
+         BE    INI0720                 yes
+         ZZWTO MID=XPC019E,V1=MIDMSAS
+         ZZTRC INI=K,SWKEY=NO          trace
+         B     INIEXIT                 exit
+*
+INI0710  DS    0H
+         L     R3,BAASCB               MSAS ASCB address
+         USING ASCB,R3                 set addressability
+         L     R3,ASCBASXB             ASXB address
+         USING ASXB,R3                 set addressability
+         L     R3,ASXBFTCB             IEEVIPL TCB
+*
+INI0720  DS    0H
+         USING TCB,R3                  set addressability
+         ST    R11,TCBFSA              anchor ZXVT address
+         LA    R1,TCBFSA               FSA address
+         ST    R1,ZXVTFSAA             save FSA address
+*
+**       Enable WTO messages broadcast
+*
+         LA    R3,DSASCSRL             SCSR address
+         USING SCSRPLST,R3             set addressability
+         ST    R3,DSASCSR              set linkage pointer
+         XC    SCSRPLST(SCSPLEN),SCSRPLST
+         MVC   SCSACRO,=CL4'SCSR'      ID SCSR
+         MVI   SCSVER,SCSVERSN         Set version level
+         OI    SCSFUNC1,SCSBRDON       enable WTO/R broadcast
+         LA    R1,DSASCSR              SCSR address
+         LINK  EP=IEAVG700             SSI console routine
+         ST    R15,ZXVTG7RC            save RC
+         LTR   R15,R15                 successful?
+         BNZ   INI0800                 no
+         OI    ZXVTFLG4,ZXVT@G7C       yes, set indicator
+         ZZTRC INI=L,SWKEY=NO          trace
+*
+**       Enable monitor jobnames broadcast
+*
+INI0800  DS    0H
+         TM    ZXVTFLG2,ZXVT@CON       CON=YES?
+         BZ    INI0900                 no
+         MVC   DSAPLST(ZSETCLN),ZSETCON
+         XR    R0,R0                   console ID
+         MGCR  DSAPLST                 issue SETCON command
+         ST    R1,ZXVTCONR             save RC
+         ZZTRC INI=M,SWKEY=NO          trace
+*
+**       Build common ZXRE cell pool
+*
+INI0900  DS    0H
+         MVC   DSAPLST(ZCPOOLZ),ZCPOOL
+         MVC   DSACPHDR,ZCPOOLH        cell pool hdr
+         MVC   DSACPSUB,ZXVTSUBN       server name
+         CPOOL BUILD,                                                  +
+               SP=241,                 common subpool                  +
+               KEY=0,                  storage key                     +
+               LOC=31,                 storage location                +
+               PCELLCT=&ZXREPRI,       primary cells                   +
+               SCELLCT=&ZXRESEC,       secondary cells                 +
+               CSIZE=XRE@SIZE,         cell size                       +
+               CPID=ZXVTCPID,          cell pool ID                    +
+               OWNER=PRIMARY,          cell pool owner                 +
+               HDR=DSACPHDR,           cell pool header                +
+               LINKAGE=SYSTEM,         use PC call                     +
+               MF=(E,DSAPLST)
+         OI    ZXVTFLG1,ZXVT@CPL       set created indicator
+         ZZTRC INI=N,SWKEY=NO          trace
+*
+**       Activate SSI listener routines
+*
+INI0999  DS    0H
+         L     R4,ZXVTXSRV             XPCSRV EPA
+         USING XID,R4                  set addressability
+         L     R4,XIDSSI               write protected SSVT
+         LA    R2,ZXVTSSVT             SSVT block address
+         LA    R3,ZXVTSSVZ             SSVT block size
+         LR    R5,R3
+         MVCL  R2,R4                   copy SSVT block
+         LA    R4,ZXVTSSVT             SSVT address
+         USING ZSSVT,R4                set addressability
+         OI    ZSSVTEOT,AMODE31        XPCEOT addressing mode
+         OI    ZSSVTEOM,AMODE31        XPCeOM addressing mode
+         OI    ZSSVTWTO,AMODE31        XPCWTO addressing mode
+         OI    ZSSVTCMD,AMODE31        XPCCMD addressing mode
+         ST    R4,SSCTSSVT             activate ZXPC server
+         OI    ZXVTFLG1,ZXVT@SSI       SSI listeners activated
+         OI    ZXVTFLG1,ZXVT@INI       initialization complete
+         ZZWTO MID=XPC001I             issue msg
+         OI    ZXVTFLG1,ZXVT@ACT       server is now active
+         ZZTRC INI=O,SWKEY=NO          trace
+*
+**       Restore original authorization index
+*
+INIEXIT  DS    0H
+         TM    DSAFLG1,DSA@AXV         AX restore required?
+         BZ    INIXIT00                no
+         L     R0,ZXVTENAX             original AX
+         AXSET AX=(0)                  restore AX
+         ZZTRC INI=P,SWKEY=NO          trace
+*
+INIXIT00 DS    0H
+         L     R13,GPR@BWD(R13)        caller savearea
+         L     R3,DSARC                RC
+         SPKA  X'80'(0)                probelem key
+         STORAGE RELEASE,COND=NO,CALLRKY=YES,                          +
+               ADDR=(12),LENGTH=DSA@SZE,SP=130,LINKAGE=SYSTEM
+         SPKA  0(0)                    supervisor key
+         LM    R0,R12,GPR@R0(R13)      restore caller's regs
+         L     R14,GPR@R14(,R13)       return address
+         BR    R14                     return
+*---------------------------------------------------------------------*
+*        ABEND Exit                                                   *
+*--------+---------+---------+---------+---------+---------+---------+*
+INIABEND DS    0H
+         L     R2,DSARSN               RSN
+         ABEND 2022,DUMP,REASON=(2)    ABEND
+*---------------------------------------------------------------------*
+*        Constants                                                    *
+*--------+---------+---------+---------+---------+---------+---------+*
+         DS    0F
+LMODDCT  DC    F'1'                    module delete count
+LMODACT  DC    F'1'                    module fetch count
+         DS    0C
+LNKLST   DC    CL8'LNKLST'             fetch module from LNKLST
+LMODREQ  DC    CL16'ZPI&REL.ZXPCINI'   LPA add requestor ID
+LRSN401  DC    XL4'00000401'           MVS service reason code
+*---------------------------------------------------------------------*
+*        Dynamic-LPA ADD/DELETE serialization                         *
+*--------+---------+---------+---------+---------+---------+---------+*
+         DS    0F
+CSVENQ   ENQ   (CSVMAJ,CSVMIN,E,8,SYSTEM),RET=HAVE,MF=L
+CSVENQL  EQU   *-CSVENQ
+         DS    0F
+CSVDEQ   DEQ   (CSVMAJ,CSVMIN,8,SYSTEM),MF=L
+CSVDEQL  EQU   *-CSVDEQ
+         DS    0C
+CSVMAJ   DC    CL8'SYSZCSV'            Major name
+CSVMIN   DC    CL8'CSVDYLPA'           Minor name
+*---------------------------------------------------------------------*
+*        Stacking PC listforms                                        *
+*--------+---------+---------+---------+---------+---------+---------+*
+         DS    0F
+ETCON    ETCON MF=L
+ETCON@SZ EQU   *-ETCON
+         DS    0F
+LXRES    LXRES SYSTEM=YES,                                             +
+               REUSABLE=NO,                                            +
+               LXLIST=0,MF=L
+LXR@SZE  EQU   *-LXRES
+         DS    0D
+DEFINIT  ETDEF TYPE=INITIAL
+DEFXPC   ETDEF TYPE=ENTRY,                                             +
+               PC=STACKING,            stacking                        +
+               SASN=NEW,               SASN=PASN                       +
+               RAMODE=31,              AMODE=31                        +
+               ROUTINE=0,              ZXPC PC                         +
+               ASCMODE=PRIMARY,        execute in primary space        +
+               SSWITCH=NO,             CR1 & CR7 set to primary        +
+               STATE=SUPERVISOR,       Supervisor state                +
+               AKM=(0:15),             all callers are welcome         +
+               EKM=(0:15)              PKM key mask
+DEFINAL  ETDEF TYPE=FINAL
+DEF@ALLZ EQU   *-DEFINIT               complete ETD size
+*---------------------------------------------------------------------*
+*        MGCR listform                                                *
+*--------+---------+---------+---------+---------+---------+---------+*
+         DS    0F
+ZSETCON  DS    0XL80                   MGCR buffer
+         DC    AL2(ZSETCLN)            -buffer length
+         DC    AL2(0)                  -buffer options
+         DC    CL76'SETCON MN,JOBNAMES=(ON,LOG)'
+ZSETCLN  EQU   *-ZSETCON               MGCR buffer size
+*---------------------------------------------------------------------*
+*        CPOOL BUILD listform                                         *
+*--------+---------+---------+---------+---------+---------+---------+*
+         DS    0F
+ZCPOOL   CPOOL BUILD,SP=,PCELLCT=,SCELLCT=,CSIZE=,OWNER=,HDR=,MF=L
+ZCPOOLZ  EQU   *-ZCPOOL
+         DS    0C
+ZCPOOLH  DC    CL24'&SUB-&REL-ZXRE-CPOOL'
+ZCPOOLHZ EQU   *-ZCPOOLH
+*---------------------------------------------------------------------*
+*        Literals                                                     *
+*--------+---------+---------+---------+---------+---------+---------+*
+         LTORG ,
+         DROP  ,
+*/********************************************************************/
+*/*                                                                  */
+*/* Name:        ENFDEL                                              */
+*/*                                                                  */
+*/* Function:    Delete ENF event requests subroutine                */
+*/*                                                                  */
+*/* Input Regs:  R11 ZXVT address                                    */
+*/*              R12 DSA address                                     */
+*/*              R13 Savearea address                                */
+*/*              R14 Return address                                  */
+*/*              R15 Entry address                                   */
+*/*                                                                  */
+*/* Regs Usage:  R8  ZXRE address                                    */
+*/*              R9  SSCT address                                    */
+*/*              R10 Base address                                    */
+*/*              R11 ZXVT address                                    */
+*/*              R12 DSA address                                     */
+*/*              R13 Savearea address                                */
+*/*                                                                  */
+*/* Output Regs: R15 Return code                                     */
+*/*              R0  Reason code                                     */
+*/*                                                                  */
+*/********************************************************************/
+*/-------+---------+---------+---------+---------+---------+---------*/
+ENFDEL   DS    0H
+         USING ZXVT,R11
+         USING DSA,R12
+         B     12(,R15)
+*
+ENFDID   DC    CL8'ENFDEL'             ID
+         STM   R14,R12,GPR@R14(R13)    save caller regs
+         LR    R10,R15                 set base address
+         USING ENFDEL,R10              base addressability
+         LA    R1,DSASBSA              subroutine save area
+         ST    R13,GPR@BWD(,R1)        chain,
+         ST    R1,GPR@FWD(,R13)        save,
+         LR    R13,R1                  areas.
+*
+**       Locate ENF signal owners
+*
+         XR    R8,R8
+         L     R3,ZXVTENFQ             ZXRE queue
+         CS    R8,R3,ZXVTENFQ          listeners queued?
+         BZ    ENFDXIT                 no, exit
+         USING ZXRE,R8                 set addressability
+         B     ENFD010                 scan queue
+*
+ENFD000  DS    0H
+         ICM   R8,15,XRECHPTR          last entry?
+         BZ    ENFDXIT                 yes, exit
+*
+ENFD010  DS    0H
+         CLC   XREID,=CL4'ZXRE'        valid entry?
+         BNE   ENFDXIT                 no, exit
+         TM    XREFLAG1,XRE@OWNR       request owner?
+         BZ    ENFD000                 no, next entry
+         TM    XREFLAG1,XRE@ENFD       delete required?
+         BZ    ENFD000                 no, next entry
+*
+**       Issue ENFREQ ACTION=DELETE call
+*
+         L     R2,XRESIGNL             event code
+         L     R3,XRETKENF             delete token
+         MVC   DSAPLST(ZENFREQL),ZENFREQ
+         ENFREQ ACTION=DELETE,CODE=(2),DTOKEN=(3),                     +
+               MF=(E,DSAPLST)
+         B     ENFD000                 next entry
+*
+ENFDXIT  DS    0H
+         L     R13,GPR@BWD(R13)        caller savearea
+         LM    R14,R12,GPR@R14(R13)    restore regs
+         BR    R14                     return
+*---------------------------------------------------------------------*
+*        Constants/Literals                                           *
+*--------+---------+---------+---------+---------+---------+---------+*
+         DS    0F
+ZENFREQ  ENFREQ ACTION=DELETE,CODE=*-*,MF=L
+ZENFREQL EQU   *-ZENFREQ
+         LTORG ,
+         DROP  ,
+*/********************************************************************/
+*/*                                                                  */
+*/* Name:        XVTINI                                              */
+*/*                                                                  */
+*/* Function:    Initialize server vector table subroutine           */
+*/*                                                                  */
+*/* Input Regs:  R11 ZXVT address                                    */
+*/*              R12 DSA address                                     */
+*/*              R13 Savearea address                                */
+*/*              R14 Return address                                  */
+*/*              R15 Entry address                                   */
+*/*                                                                  */
+*/* Regs Usage:  R9  SSCT address                                    */
+*/*              R10 Base address                                    */
+*/*              R11 ZXVT address                                    */
+*/*              R12 DSA address                                     */
+*/*              R13 Savearea address                                */
+*/*                                                                  */
+*/* Output Regs: R15 Return code                                     */
+*/*              R0  Reason code                                     */
+*/*                                                                  */
+*/********************************************************************/
+*/-------+---------+---------+---------+---------+---------+---------*/
+XVTINI   DS    0H
+         USING ZXVT,R11
+         USING DSA,R12
+         B     12(,R15)
+*
+XVTIID   DC    CL8'XVTINI'             ID
+         STM   R14,R12,GPR@R14(R13)    save caller regs
+         LR    R10,R15                 set base address
+         USING XVTINI,R10              base addressability
+         LA    R1,DSASBSA              subroutine save area
+         ST    R13,GPR@BWD(,R1)        chain,
+         ST    R1,GPR@FWD(,R13)        save,
+         LR    R13,R1                  areas.
+*
+**       Init server defaults
+*
+         MVC   ZXVTZXPC,=CL8'ZXPCSRV'  SRV=ZXPCSRV default
+         MVC   ZXVTCSZE,=AL1(8)        SAF=XPCCLASS length
+         MVC   ZXVTCLAS,=CL8'XPCCLASS' SAF=XPCCLASS default
+         MVC   ZXVTZINI,=CL8'ZXPCINI'  initialization module
+         MVC   ZXVTMAJR,=CL8'ZXPCSERV' ENQ/DEQ server major
+         MVC   ZXVTMINR,=CL8'ZXREQUE'  ENQ/DEQ server minor
+         MVC   ZXVTMODE,=CL4'PROD'     MODE=PROD default
+         MVC   ZXVTUSER,=CL8'BENMAR'   UID=user-ID default
+         MVC   ZXVTZCNV,ZCONVTAB       conversion table
+         NI    ZXVTFLG2,XFF-ZXVT@ENQ   set ENQ=NO default
+         MVI   ZXVTBLKS,BLANK          init blanks field
+         MVC   ZXVTBLKS+1(ZXVT@BLZ-1),ZXVTBLKS
+         MVI   ZXVTDOTS,C'.'           init dots field
+         MVC   ZXVTDOTS+1(ZXVT@DTZ-1),ZXVTDOTS
+         ZZTRC INI=$,SWKEY=NO,MID=XVTIID,MOD=XPCINI
+*
+**       Init system environment data
+*
+         USING PSA,0
+         L     R3,FLCCVT               CVT
+         USING CVT,R3                  set addressability
+         L     R4,CVTECVT              ECVT address
+         USING ECVT,R4                 set addressability
+         ICM   R3,15,CVTSMCA           SMCA init?
+         BZ    XVTI000                 no
+         USING SMCABASE,R3             set addressability
+         MVC   ZXVTSID,SMCASID         init SMF system ID
+*
+XVTI000  DS    0H
+         MVC   ZXVTLPAR,ECVTLPNM       init LPAR name
+         MVC   ZXVTVMID,ECVTVMNM       init VM host ID
+         ZZTRC INI=#,SWKEY=NO          trace
+*
+**       Init DEBUG data
+*
+         MVC   ZXVTDBGA,=CL4'CM1='     ID
+         MVC   ZXVTDBG1,ZXVTBLKS       clear
+*
+         MVC   ZXVTDBGB,=CL4'CM2='     ID
+         MVC   ZXVTDBG2,ZXVTBLKS       clear
+*
+         MVC   ZXVTDBGC,=CL4'WT1='     ID
+         MVC   ZXVTDBG3,ZXVTBLKS       clear
+*
+         MVC   ZXVTDBGD,=CL4'WT2='     ID
+         MVC   ZXVTDBG4,ZXVTBLKS       clear
+*
+         MVC   ZXVTWQEI,=CL4'WQE='     ID
+         MVC   ZXVTWQET,ZXVTBLKS       clear
+*
+         MVC   ZXVTSOMI,=CL4'SOM='     ID
+         MVC   ZXVTSOMT,ZXVTBLKS       clear
+*
+         MVC   ZXVTEOMI,=CL4'EOM='     ID
+         MVC   ZXVTEOMT,ZXVTBLKS       clear
+*
+**       Init TRACE data
+*
+         MVC   ZTRCIVID,=CL4'INI='     trace ID
+         MVC   ZTRCIVLX,=CL8'XPCINI'   module
+         MVC   ZTRCIVIX,XVTIID         subroutine
+         MVC   ZTRCINTR,ZXVTDOTS       dots
+*
+         MVC   ZTRCSVID,=CL4'SRV='     trace ID
+         MVC   ZTRCSVTR,ZXVTDOTS
+*
+         MVC   ZTRCCMID,=CL4'CMD='     trace ID
+         MVC   ZTRCCMTR,ZXVTDOTS
+*
+         MVC   ZTRCWTID,=CL4'WTO='     trace ID
+         MVC   ZTRCWTTR,ZXVTDOTS
+*
+         MVC   ZTRCETID,=CL4'EOT='     trace ID
+         MVC   ZTRCETTR,ZXVTDOTS
+*
+         MVC   ZTRCSMID,=CL4'SOM='     trace ID
+         MVC   ZTRCSMTR,ZXVTDOTS
+*
+         MVC   ZTRCEMID,=CL4'EOM='     trace ID
+         MVC   ZTRCEMTR,ZXVTDOTS
+*
+         MVC   ZTRCENID,=CL4'ENF='     trace ID
+         MVC   ZTRCENTR,ZXVTDOTS
+*
+         MVC   ZTRCNCID,=CL4'NUC='     trace ID
+         MVC   ZTRCNCTR,ZXVTDOTS
+*
+         MVC   ZTRCTRID,=CL4'TRG='     trace ID
+         MVC   ZTRCTRTR,ZXVTDOTS
+*
+         MVC   ZTRCRUID,=CL4'RUN='     trace ID
+         MVC   ZTRCRUTR,ZXVTDOTS
+*
+         MVC   ZTRCLOID,=CL4'LOC='     trace ID
+         MVC   ZTRCLOTR,ZXVTDOTS
+*
+         MVC   ZTRCPAID,=CL4'PAR='     trace ID
+         MVC   ZTRCPATR,ZXVTDOTS
+*
+         MVC   ZTRCIRID,=CL4'IRB='     trace ID
+         MVC   ZTRCIRTR,ZXVTDOTS
+*
+         MVC   ZTRCSRID,=CL4'SRB='     trace ID
+         MVC   ZTRCSRTR,ZXVTDOTS
+*
+         MVC   ZTRCLSID,=CL4'LSN='     trace ID
+         MVC   ZTRCLSTR,ZXVTDOTS
+*
+         MVC   ZTRCSCID,=CL4'SCH='     trace ID
+         MVC   ZTRCSCTR,ZXVTDOTS
+*
+         MVC   ZTRCXCID,=CL4'XCF='     trace ID
+         MVC   ZTRCXCTR,ZXVTDOTS
+*
+         MVC   ZTRCDBID,=CL4'Db2='     trace ID
+         MVC   ZTRCDBTR,ZXVTDOTS
+*
+         ZZTRC INI=@,SWKEY=NO          trace
+*
+XVTEXIT  DS    0H
+         L     R13,GPR@BWD(R13)        caller savearea
+         LM    R14,R12,GPR@R14(R13)    restore regs
+         BR    R14                     return
+*---------------------------------------------------------------------*
+*        Constants/Literals                                           *
+*--------+---------+---------+---------+---------+---------+---------+*
+         DS    0C
+ZCONVTAB DC    CL16'0123456789ABCDEF'  ZCONV - conversion table
+         LTORG ,
+         DROP  ,
+*/********************************************************************/
+*/*                                                                  */
+*/* Name:        PARINI                                              */
+*/*                                                                  */
+*/* Function:    Parse initialization parameters subroutine          */
+*/*                                                                  */
+*/* Input Regs:  R8  JSIPL address                                   */
+*/*              R9  SSCT address                                    */
+*/*              R11 ZXVT address                                    */
+*/*              R12 DSA address                                     */
+*/*              R13 Savearea address                                */
+*/*              R14 Return address                                  */
+*/*              R15 Entry address                                   */
+*/*                                                                  */
+*/* Regs Usage:  R8  JSIPL address                                   */
+*/*              R9  SSCT address                                    */
+*/*              R10 Base address                                    */
+*/*              R11 ZXVT address                                    */
+*/*              R12 DSA address                                     */
+*/*              R13 Savearea address                                */
+*/*                                                                  */
+*/* Output Regs: R15 Return code                                     */
+*/*              R0  Reason code                                     */
+*/*                                                                  */
+*/********************************************************************/
+*/-------+---------+---------+---------+---------+---------+---------*/
+PARINI   DS    0H
+         USING JSIPL,R8
+         USING SSCT,R9
+         USING ZXVT,R11
+         USING DSA,R12
+         B     12(,R15)
+*
+PARID    DC    CL8'PARINI'             ID
+         STM   R14,R12,GPR@R14(R13)    save caller regs
+         LR    R10,R15                 set base address
+         USING PARINI,R10              base addressability
+         LA    R1,DSASBSA              subroutine save area
+         ST    R13,GPR@BWD(,R1)        chain,
+         ST    R1,GPR@FWD(,R13)        save,
+         LR    R13,R1                  areas.
+         ZZTRC INI=0,SWKEY=NO,MID=PARID,MOD=XPCINI
+*
+**       Copy INITPARM parameters
+*
+         MVC   ZXVTCONS,JSICNAME       init console name
+         MVI   ZXVTPARM,BLANK          scrub parm work area
+         MVC   ZXVTPARM+1(ZXVT@PLN-1),ZXVTPARM
+         XR    R2,R2
+         ICM   R2,1,JSILGTPR           INITPARM length?
+         BNZ   PAR0010                 yes
+         OI    ZXVTFLG2,ZXVT@NPR       no
+         ZZTRC INI=1,SWKEY=NO          trace
+         B     PAR0999                 exit
+*
+PAR0010  DS    0H
+         L     R3,JSIADRPR             INITPARM address
+         BCTR  R2,0
+         EX    R2,COPYPRM              copy INITPARM
+         OC    ZXVTPARM,ZXVTBLKS       uppercase INITPARM
+*
+**       Parse SRV= INITPARM parameter
+*
+         LA    R2,ZXVT@PLN             parm data length
+         LA    R3,ZXVTPARM             parm data address
+*
+PAR0020  DS    0H
+         CLC   SRVID,0(R3)             SRV= specified?
+         BE    PAR0030                 yes
+         LA    R3,1(,R3)               walk thru data
+         BCT   R2,PAR0020              loop
+         B     PAR0060                 carry on
+*
+PAR0030  DS    0H
+         LA    R3,4(,R3)               skip SRV=
+         LR    R1,R3                   copy name address
+         LA    R2,9                    loop value
+*
+PAR0040  DS    0H
+         CLI   0(R3),BLANK             end of name?
+         BE    PAR0050                 yes
+         CLI   0(R3),COMMA             end of name?
+         BE    PAR0050                 yes
+         LA    R3,1(,R3)               walk thru data
+         BCT   R2,PAR0040              loop
+         B     PAR0060                 carry on
+*
+PAR0050  DS    0H
+         SLR   R3,R1                   name valid?
+         BZ    PAR0060                 no
+         BCTR  R3,0                    decrement for EXecute
+         EX    R3,COPYSRV              copy module name
+         OI    ZXVTFLG2,ZXVT@SRV       SRV module name specified
+         ZZTRC INI=2,SWKEY=NO          trace
+*
+**       Parse SAF= INITPARM parameter
+*
+PAR0060  DS    0H
+         LA    R2,ZXVT@PLN             parm data length
+         LA    R3,ZXVTPARM             parm data address
+*
+PAR0070  DS    0H
+         CLC   SAFID,0(R3)             SAF= specified?
+         BE    PAR0080                 yes
+         LA    R3,1(,R3)               walk thru parm
+         BCT   R2,PAR0070              loop
+         B     PAR0120                 carry on
+*
+PAR0080  DS    0H
+         LA    R3,4(,R3)               skip SAF=
+         LR    R1,R3                   copy class address
+         LA    R2,9                    loop value
+*
+PAR0090  DS    0H
+         CLI   0(R3),BLANK             end of class?
+         BE    PAR0100                 yes
+         CLI   0(R3),COMMA             end of class?
+         BE    PAR0100                 yes
+         LA    R3,1(,R3)               walk thru parm
+         BCT   R2,PAR0090              loop
+         B     PAR0120                 carry on
+*
+PAR0100  DS    0H
+         SLR   R3,R1                   class valid
+         BZ    PAR0120                 no
+         MVI   DSAWORK,BLANK           scrub,
+         MVC   DSAWORK+1(7),DSAWORK    class name field.
+         STC   R3,ZXVTCSZE             SAF=class length
+         BCTR  R3,0                    decrement for EXecute
+         EX    R3,COPYSAF              copy class name
+         CLC   DSAWORK,NOCALL          SAF=NOCALL specified?
+         BNE   PAR0110                 no
+         MVC   ZXVTCLAS,DSAWORK        set SAF=NOCALL
+         ZZWTO MID=XPC009I             issue msg
+         B     PAR0120                 carry on
+*
+PAR0110  DS    0H
+         MVC   ZXVTCLAS,DSAWORK        init specified class
+         OI    ZXVTFLG2,ZXVT@SAF       SAF class specified
+         ZZTRC INI=3,SWKEY=NO          trace
+*
+**       Parse ENQ= INITPARM parameter
+*
+PAR0120  DS    0H
+         LA    R2,ZXVT@PLN             parm data length
+         LA    R3,ZXVTPARM             parm data address
+*
+PAR0130  DS    0H
+         CLC   ENQID,0(R3)             ENQ= specified?
+         BE    PAR0140                 yes
+         LA    R3,1(,R3)               walk thru parm
+         BCT   R2,PAR0130              loop
+         NI    ZXVTFLG2,XFF-ZXVT@ENQ   ENQ=NO default
+         ZZTRC INI=4,SWKEY=NO          trace
+         B     PAR0150                 carry on
+*
+PAR0140  DS    0H
+         LA    R3,4(,R3)               skip ID
+         NI    ZXVTFLG2,XFF-ZXVT@ENQ   assume ENQ=NO
+         CLC   0(2,R3),=CL2'NO'
+         BE    PAR0150
+         OI    ZXVTFLG2,ZXVT@ENQ       assume ENQ=YES
+         CLC   0(3,R3),=CL3'YES'
+         BE    PAR0150
+         MVC   DSARC,=AL4(RC8)         fail RC
+         ZZWTO MID=XPC006E,V1==CL3'ENQ'
+         ZZWTO MID=XPC005E             init failed
+         B     PAREXIT                 exit
+*
+**       Parse DMP= INITPARM parameter
+*
+PAR0150  DS    0H
+         LA    R2,ZXVT@PLN             parm data length
+         LA    R3,ZXVTPARM             parm data address
+*
+PAR0160  DS    0H
+         CLC   DMPID,0(R3)             DMP= specified?
+         BE    PAR0170                 yes
+         LA    R3,1(,R3)               walk thru parm
+         BCT   R2,PAR0160              loop
+         NI    ZXVTFLG2,XFF-ZXVT@DMP   DMP=NO default
+         ZZTRC INI=5,SWKEY=NO          trace
+         B     PAR0180                 carry on
+*
+PAR0170  DS    0H
+         LA    R3,4(,R3)               skip ID
+         NI    ZXVTFLG2,XFF-ZXVT@DMP   assume DMP=NO
+         CLC   0(2,R3),=CL2'NO'
+         BE    PAR0180
+         OI    ZXVTFLG2,ZXVT@DMP       assume DMP=YES
+         CLC   0(3,R3),=CL3'YES'
+         BE    PAR0180
+         MVC   DSARC,=AL4(RC8)         fail RC
+         ZZWTO MID=XPC006E,V1==CL3'DMP'
+         ZZWTO MID=XPC005E             init failed
+         B     PAREXIT                 exit
+*
+**       Parse CMP= INITPARM parameter
+*
+PAR0180  DS    0H
+         LA    R2,ZXVT@PLN             parm data length
+         LA    R3,ZXVTPARM             parm data address
+*
+PAR0190  DS    0H
+         CLC   CMPID,0(R3)             CMP= specified?
+         BE    PAR0200                 yes
+         LA    R3,1(,R3)               walk thru parm
+         BCT   R2,PAR0190              loop
+         OI    ZXVTFLG2,ZXVT@CMP       CMP=YES default
+         ZZTRC INI=6,SWKEY=NO          trace
+         B     PAR0210                 carry on
+*
+PAR0200  DS    0H
+         LA    R3,4(,R3)               skip ID
+         NI    ZXVTFLG2,XFF-ZXVT@CMP   assume CMP=NO
+         CLC   0(2,R3),=CL2'NO'
+         BE    PAR0210
+         OI    ZXVTFLG2,ZXVT@CMP       assume CMP=YES
+         CLC   0(3,R3),=CL3'YES'
+         BE    PAR0210
+         MVC   DSARC,=AL4(RC8)         fail RC
+         ZZWTO MID=XPC006E,V1==CL3'CMP'
+         ZZWTO MID=XPC005E             init failed
+         B     PAREXIT                 exit
+*
+**       Parse TRC= INITPARM parameter
+*
+PAR0210  DS    0H
+         LA    R2,ZXVT@PLN             parm data length
+         LA    R3,ZXVTPARM             parm data address
+*
+PAR0220  DS    0H
+         CLC   TRCID,0(R3)             TRC= specified?
+         BE    PAR0230                 yes
+         LA    R3,1(,R3)               walk thru parm
+         BCT   R2,PAR0220              loop
+         NI    ZXVTFLG2,XFF-ZXVT@TRC   TRC=OFF default
+         B     PAR0240                 carry on
+*
+PAR0230  DS    0H
+         LA    R3,4(,R3)               skip ID
+         NI    ZXVTFLG2,XFF-ZXVT@TRC   assume TRC=OFF
+         CLC   0(3,R3),=CL3'OFF'
+         BE    PAR0240
+         OI    ZXVTFLG2,ZXVT@TRC       assume TRC=ON
+         CLC   0(2,R3),=CL2'ON'
+         BE    PAR0240
+         MVC   DSARC,=AL4(RC8)         fail RC
+         ZZWTO MID=XPC006E,V1==CL3'TRC'
+         ZZWTO MID=XPC005E             init failed
+         B     PAREXIT                 exit
+*
+**       Parse CON= INITPARM parameter
+*
+PAR0240  DS    0H
+         LA    R2,ZXVT@PLN             parm data length
+         LA    R3,ZXVTPARM             parm data address
+*
+PAR0250  DS    0H
+         CLC   CONID,0(R3)             CON= specified?
+         BE    PAR0260                 yes
+         LA    R3,1(,R3)               walk thru parm
+         BCT   R2,PAR0250              loop
+         NI    ZXVTFLG2,XFF-ZXVT@CON   CON=NO default
+         ZZTRC INI=7,SWKEY=NO          trace
+         B     PAR0270                 carry on
+*
+PAR0260  DS    0H
+         LA    R3,4(,R3)               skip ID
+         NI    ZXVTFLG2,XFF-ZXVT@CON   assume CON=NO
+         CLC   0(2,R3),=CL2'NO'
+         BE    PAR0270
+         OI    ZXVTFLG2,ZXVT@CON       assume CON=YES
+         CLC   0(3,R3),=CL3'YES'
+         BE    PAR0270
+         MVC   DSARC,=AL4(RC8)         fail RC
+         ZZWTO MID=XPC006E,V1==CL3'CON'
+         ZZWTO MID=XPC005E             init failed
+         B     PAREXIT                 exit
+*
+**       Parse SUP= INITPARM parameter
+*
+PAR0270  DS    0H
+         LA    R2,ZXVT@PLN             parm data length
+         LA    R3,ZXVTPARM             parm data address
+*
+PAR0280  DS    0H
+         CLC   SUPID,0(R3)             SUP= specified?
+         BE    PAR0290                 yes
+         LA    R3,1(,R3)               walk thru parm
+         BCT   R2,PAR0280              loop
+         NI    ZXVTFLG3,XFF-ZXVT@SUP   SUP=NO default
+         ZZTRC INI=8,SWKEY=NO          trace
+         B     PAR0300
+*
+PAR0290  DS    0H
+         LA    R3,4(,R3)               skip ID
+         NI    ZXVTFLG3,XFF-ZXVT@SUP   assume SUP=NO
+         CLC   0(2,R3),=CL2'NO'
+         BE    PAR0300
+         OI    ZXVTFLG3,ZXVT@SUP       assume SUP=YES
+         CLC   0(3,R3),=CL3'YES'
+         BE    PAR0300
+         MVC   DSARC,=AL4(RC8)         fail RC
+         ZZWTO MID=XPC006E,V1==CL3'SUP'
+         ZZWTO MID=XPC005E             init failed
+         B     PAREXIT
+*
+**       Parse MODE= INITPARM parameter
+*
+PAR0300  DS    0H
+         LA    R2,ZXVT@PLN             parm data length
+         LA    R3,ZXVTPARM             parm data address
+*
+PAR0310  DS    0H
+         CLC   MODEID,0(R3)            MODE= specified?
+         BE    PAR0320                 yes
+         LA    R3,1(,R3)               walk thru parm
+         BCT   R2,PAR0310              loop
+         NI    ZXVTFLG3,XFF-ZXVT@TST   MODE=PROD (default)
+         ZZTRC INI=9,SWKEY=NO          trace
+         B     PAR0330                 carry on
+*
+PAR0320  DS    0H
+         LA    R3,5(,R3)               skip ID
+         NI    ZXVTFLG3,XFF-ZXVT@TST   MODE=PROD (default)
+         MVC   ZXVTMODE,0(R3)          copy run mode
+         CLC   0(4,R3),=CL4'PROD'      MODE=PROD?
+         BE    PAR0330
+         OI    ZXVTFLG3,ZXVT@TST       set MODE=TEST
+         MVC   ZXVTMODE,0(R3)          copy run mode
+         CLC   0(4,R3),=CL4'TEST'      MODE=TEST?
+         BE    PAR0330                 yes
+         MVC   DSARC,=AL4(RC8)         fail RC
+         ZZWTO MID=XPC017E,V1==CL4'MODE'
+         ZZWTO MID=XPC005E             init failed
+         B     PAREXIT                 exit
+*
+**       Parse UID= INITPARM parameter
+*
+PAR0330  DS    0H
+         LA    R2,ZXVT@PLN             parm data length
+         LA    R3,ZXVTPARM             parm data address
+*
+PAR0340  DS    0H
+         CLC   UIDID,0(R3)             UID= specified?
+         BE    PAR0350                 yes
+         LA    R3,1(,R3)               walk thru data
+         BCT   R2,PAR0340              loop
+         B     PAR0999                 carry on
+*
+PAR0350  DS    0H
+         LA    R3,4(,R3)               skip UID=
+         LR    R1,R3                   copy address
+         LA    R2,9                    loop value
+*
+PAR0360  DS    0H
+         CLI   0(R3),BLANK             end of UID?
+         BE    PAR0370                 yes
+         CLI   0(R3),COMMA             end of UID?
+         BE    PAR0370                 yes
+         LA    R3,1(,R3)               walk thru data
+         BCT   R2,PAR0360              loop
+         B     PAR0999                 carry on
+*
+PAR0370  DS    0H
+         SLR   R3,R1                   valid UID?
+         BZ    PAR0999                 no
+         BCTR  R3,0                    decrement for EXecute
+         EX    R3,COPYUID              copy userID
+         ZZTRC INI=Y,SWKEY=NO          trace
+*
+*
+PAR0999  DS    0H
+         XC    DSARC,DSARC             set RC
+         XC    DSARSN,DSARSN           set RSN
+         ZZTRC INI=Z,SWKEY=NO          trace
+*
+PAREXIT  DS    0H
+         L     R15,DSARC               RC
+         L     R0,DSARSN               RSN
+         L     R13,GPR@BWD(R13)        caller savearea
+         LM    R1,R12,GPR@R1(R13)      restore regs
+         L     R14,GPR@R14(R13)        return address
+         BR    R14                     return
+*---------------------------------------------------------------------*
+*        EXecuted instructions                                        *
+*--------+---------+---------+---------+---------+---------+---------+*
+         DS    0H
+COPYSAF  MVC   DSAWORK(*-*),0(R1)
+COPYPRM  MVC   ZXVTPARM(*-*),0(R3)
+COPYSRV  MVC   ZXVTZXPC(*-*),0(R1)
+COPYUID  MVC   ZXVTUSER(*-*),0(R1)
+*---------------------------------------------------------------------*
+*        Constants/Literals                                           *
+*--------+---------+---------+---------+---------+---------+---------+*
+         DS    0C
+SRVID    DC    CL4'SRV='               INITPARM
+SAFID    DC    CL4'SAF='               INITPARM
+CMPID    DC    CL4'CMP='               INITPARM
+CONID    DC    CL4'CON='               INITPARM
+DMPID    DC    CL4'DMP='               INITPARM
+ENQID    DC    CL4'ENQ='               INITPARM
+SUPID    DC    CL4'SUP='               INITPARM
+TRCID    DC    CL4'TRC='               INITPARM
+UIDID    DC    CL4'UID='               INITPARM
+MODEID   DC    CL5'MODE='              INITPARM
+NOCALL   DC    CL8'NOCALL'             INITPARM
+         LTORG ,
+         DROP  ,
+*---------------------------------------------------------------------*
+*        Dynamic Storage Area                                         *
+*--------+---------+---------+---------+---------+---------+---------+*
+DSA      DSECT ,
+DSASAVE  DS    18F                     mainline savearea
+DSASBSA  DS    18F                     subroutine savearea
+         DS    0X
+DSAFLG1  DS    XL1                     flags
+DSA@ENQ  EQU   X'80'                   CSVDYLPA ENQ indicator
+DSA@CMD  EQU   X'40'                   APICMD command indicator
+DSA@AXV  EQU   X'20'                   AXSET restore required
+DSA@RES  EQU   X'10'                   previous instance released
+DSA@SLX  EQU   X'08'                   previous instance SLX retained
+DSA@RSV5 EQU   X'04'                   -available
+DSA@RSV6 EQU   X'02'                   -available
+DSA@RSV7 EQU   X'01'                   -available
+         DS    0F
+DSAOPAR  DS    0F                      output parms
+DSARC    DS    F                       -R15 = RC
+DSARSN   DS    F                       -R0  = RSN
+DSAGR1   DS    F                       -R1  = output parm
+DSA@OPAL EQU   *-DSAOPAR               keep it together
+         DS    0F
+DSAXRC   DS    F                       SAF RC
+DSACKEY  DS    F                       protect key savearea
+DSARACF  DS    F                       UACC attribute
+DSAGR14  DS    F                       R14 save area
+DSAPSLX  DS    F                       previous instance SLX
+DSASCSR  DS    F                       SCSR address
+ENFPTR   DS    F                       needed by ENFREQ macro
+*
+DSALXRES DS    0F                      LXRES/LXFRE
+DSALXCNT DS    F                       -one system LX
+DSALXVAL DS    F                       -returned LX value
+DSA@LXSZ EQU   *-DSALXRES              LXRES/LXFRE list size
+*
+DSAETCON DS    0F                      ETCON/ETDIS list
+DSAETCNT DS    F                       -one ETE
+DSAETTKN DS    F                       -ETE token
+DSA@ETSZ EQU   *-DSAETCON              ETCON/ETDIS list size
+         DS    0F
+DSADYLPA DS    CL(LPMED_LEN)           CSVDYLPA listform
+         DS    0F
+DSADYLST CSVDYLPA MF=(L,DYLPAL)        CSVDYLPA listform
+         DS    0F
+DSAEQDQ  DS    CL(CSVENQL)             ENQ/DEQ listform
+DSARQLPA DS    0D
+DSARQSUB DS    CL4                     -subsystem name
+DSARQREL DS    CL6                     -subsystem release level
+DSARQMOD DS    CL6                     -subsystem load module
+DSA@RQSZ EQU   *-DSARQLPA              keep it together
+         DS    0D
+DSAWORK  DS    CL8                     workarea
+DSACPHDR DS    0CL24                   cell pool header
+DSACPSUB DS    CL4                     -server name
+DSACPHDD DS    CL20                    -header data
+DSACPHDZ EQU   *-DSACPHDR              keep it together
+         DS    0D
+DSACMD   DS    CL32                    command
+DSACMDL  EQU   *-DSACMD                command length
+         DS    0D
+DSAPARM  DS    CL100                   PARM= JCL parms
+DSAPARMZ EQU   *-DSAPARM               max parm length
+         DS    0D
+DSAPREFX DS    CL8                     CPF command prefix
+DSAOWNER DS    CL8                     CPF command prefix owner
+DSACPFX  CPF   MF=(L,DSACPF)           CPF listform
+         DS    0D
+DSASCSRL DS    CL(SCSRPLST_LEN)        SCSR parmlist
+         DS    0D
+DSAPLST  DS    XL128                   parmlist
+DSAPLSTL EQU   *-DSAPLST               parmlist size
+         DS    0D
+DSA@SZE  EQU   *-DSA                   size of DSA
+*---------------------------------------------------------------------*
+*        Server Data Areas                                            *
+*--------+---------+---------+---------+---------+---------+---------+*
+         PRINT NOGEN
+         ZZXVT ,
+         ZZXRE ,
+         ZZRWA ,
+         ZZEQU ,
+         ZZTAB GEN=SSI,DSECT=YES
+         ZZMAC GEN=MID,ID=XID,DSECT=YES
+*---------------------------------------------------------------------*
+*        System data areas                                            *
+*--------+---------+---------+---------+---------+---------+---------+*
+         PRINT NOGEN
+         IHAPSA ,
+         IHAASCB ,
+         IHAASXB ,
+         IKJTCB ,
+         ICHSAFP ,
+         IEFJESCT ,
+         IEFJSCVT ,
+         IEFJSIPL ,
+         IEEBASEA ,
+         IEESMCA ,
+         IEZVG100 ,
+         IHAECVT ,
+         CVT   DSECT=YES,LIST=YES
+         IHAETD LIST=YES
+         CSVLPRET LIST=YES
+         IEFENFCT ,
+         IEFENFPM ,
+         END

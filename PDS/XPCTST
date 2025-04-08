@@ -1,0 +1,226 @@
+XPCTST   CSECT
+*/********************************************************************/
+*/*                                                                  */
+*/* Name:        XPCTST                                              */
+*/*                                                                  */
+*/* Function:    System event listener sample program                */
+*/*                                                                  */
+*/* Description: This is a sample program that receives control      */
+*/*              as a system event listener.                         */
+*/*                                                                  */
+*/* Input Regs:  R0  ZASY element address                            */
+*/*              R1  Listener parameter word                         */
+*/*              R13 Savearea address                                */
+*/*              R14 Return address                                  */
+*/*              R15 Entry point address                             */
+*/*                                                                  */
+*/* Regs Usage:  R9  ZASY                                            */
+*/*              R12 DSA address                                     */
+*/*              R10 Base address                                    */
+*/*              R13 Savearea address                                */
+*/*                                                                  */
+*/* Output Regs: R15 Return code                                     */
+*/*                                                                  */
+*/* Attributes:  TCB-mode                                            */
+*/*              Primary mode                                        */
+*/*              Key 8                                               */
+*/*              Problem state                                       */
+*/*              Reentrant                                           */
+*/*                                                                  */
+*/********************************************************************/
+*---------------------------CHANGE LOG--------------------------------*
+*                                                                     *
+* ID    Rel    Date       Author        Comments                      *
+*---------------------------------------------------------------------*
+* @01 | V1R1 | 12072021 | Ben Marino  | Sample listener program       *
+*     |      |          |             |                               *
+***********************************************************************
+*--------+---------+---------+---------+---------+---------+---------+*
+XPCTST   AMODE 31
+XPCTST   RMODE ANY
+         COPY  ZZGBL
+         USING XPCTST,R15              entry
+         STM   R14,R12,GPR@R14(R13)    save caller regs
+         B     TST0000                 branch
+         ZZMAC GEN=MID,DSECT=NO        module ID
+*
+**       Establish addressability
+*
+TST0000  DS    0H
+         DROP  R15
+         LR    R10,R15                 base
+         USING XPCTST,R10              addressability
+         LR    R8,R1                   copy PARM=data address
+         LR    R9,R0                   ZASY address
+         USING ZASY,R9                 set addressability
+*
+**       Obtain dynamic storage area
+*
+         STORAGE OBTAIN,LOC=ANY,LENGTH=DSA@SIZE
+         LR    R12,R1
+         USING DSA,R12                 set addressability
+         XC    DSA(DSA@SIZE),DSA       clear dsa
+         ST    R13,GPR@BWD(,R1)        chain,
+         ST    R1,GPR@FWD(,R13)        save,
+         LR    R13,R1                  areas.
+         ST    R8,DSAPARM              save PARM=data word
+         XC    DSARC,DSARC             set RC
+*
+**       Validity check ZASY element
+*
+         CLC   ASYID,=CL4'ZASY'        ZASY?
+         BE    TST0010
+         WTO   'ZXPCTST: ZASY failed validity check'
+         MVC   DSARC,=AL4(8)           error RC
+         B     TSTEXIT                 exit
+*
+TST0010  DS    0H
+         TM    ASYTYPE,ASY@ZSOM   SOM?
+         BZ    TST0020
+         WTO   'ZXPCTST: start-of-memory trigger'
+         CLC   ASYXDATA(8),=CL8'SMFDAILY'
+         BNE   TSTEXIT
+
+*        Add additional test code here
+
+
+
+
+         B     TSTEXIT
+*
+TST0020  DS    0H
+         TM    ASYTYPE,ASY@ZEOM   EOM?
+         BZ    TST0030
+         WTO   'ZXPCTST EOM end-of-memory trigger'
+         CLC   ASYXDATA(8),=CL8'GLWEEKLY'
+         BNE   TSTEXIT
+
+*        Add additional test code here
+
+
+
+
+         B     TSTEXIT
+*
+TST0030  DS    0H
+         TM    ASYTYPE,ASY@ZWTO   WTO?
+         BZ    TST0040
+         WTO   'ZXPCTST: WTO message trigger'
+         CLC   ASYXDATA(7),=CL7'IEF403I'
+         BNE   TSTEXIT
+
+*        Add additional test code here
+
+
+
+
+         B     TSTEXIT
+*
+TST0040  DS    0H
+         TM    ASYTYPE,ASY@ZCMD   CMD?
+         BZ    TST0050
+         WTO   'ZXPCTST: CMD command trigger'
+         CLC   ASYXDATA(2),=CL2'P'     stop command?
+         BE    TST0045
+         CLC   ASYXDATA(5),=CL5'STOP'  stop command?
+         BNE   TSTEXIT
+*
+TST0045  DS    0H
+
+*        Add additional test code here
+
+
+
+
+         B     TSTEXIT
+*
+TST0050  DS    0H
+         TM    ASYTYPE,ASY@ZENF   ENF?
+         BZ    TST0060
+         WTO   'ZXPCTST: ENF system event trigger'
+         LA    R4,ASYXENSG        ENF signal data
+         USING ENSG,R4
+         CLC   ENSG_EVENT_CODE,=AL4(55)  resource shortage signal?
+         BNE   TSTEXIT
+
+*        Add additional test code here
+
+
+
+
+         B     TSTEXIT
+         DROP  R4
+*
+TST0060  DS    0H
+         TM    ASYTYPE,ASY@ZDB2   Db2?
+         BZ    TST0070
+         WTO   'ZXPCTST: Db2 system event trigger'
+         CLC   ASYXDATA(8),=CL8'DSNS001I'
+         BNE   TSTEXIT
+
+*        Add additional test code here
+
+
+
+
+         B     TSTEXIT
+*
+TST0070  DS    0H
+         TM    ASYTYPE,ASY@ZXCF   XCF?
+         BZ    TST0099
+         WTO   'ZXPCTST: XCF system event trigger'
+         CLC   ASYXDATA(7),=CL7'IXC430I'
+         BNE   TSTEXIT
+
+*        Add additional test code here
+
+
+
+
+         B     TSTEXIT
+*
+TST0099  DS    0H
+         WTO   'ZXPCTST: unknown system event trigger'
+         MVC   DSARC,=AL4(12)          error RC
+*
+TSTEXIT  DS    0H
+         L     R13,GPR@BWD(R13)        caller savearea
+         STORAGE RELEASE,ADDR=(12),LENGTH=DSA@SIZE
+         LM    R0,R12,GPR@R0(R13)      restore caller regs
+         L     R14,GPR@R14(,R13)       return address
+         BR    R14                     return
+*---------------------------------------------------------------------*
+*        Constants                                                    *
+*--------+---------+---------+---------+---------+---------+---------+*
+         DS    0F
+*---------------------------------------------------------------------*
+*        Literals                                                     *
+*--------+---------+---------+---------+---------+---------+---------+*
+         LTORG ,
+         DROP  ,
+*---------------------------------------------------------------------*
+*        Dynamic Storage Area                                         *
+*--------+---------+---------+---------+---------+---------+---------+*
+DSA      DSECT ,
+DSASAVE  DS    18F                     savearea
+DSARC    DS    F                       RC
+DSARSN   DS    F                       RSN
+DSAPARM  DS    F                       PARM=data address
+         DS    0F
+DSAPLST  DS    XL128                   parmlist
+DSAPLSTL EQU   *-DSAPLST               parmlist size
+         DS    0D
+DSA@SIZE EQU   *-DSA                   size of DSA
+*---------------------------------------------------------------------*
+*        Server Data Areas                                            *
+*--------+---------+---------+---------+---------+---------+---------+*
+         ZZEQU ,
+         ZZASY ,
+*---------------------------------------------------------------------*
+*        System data areas                                            *
+*--------+---------+---------+---------+---------+---------+---------+*
+         PRINT NOGEN
+         IEFJSSOB ,
+         IEFENFSG ,
+ENSG@SZE EQU *-ENSG
+         END

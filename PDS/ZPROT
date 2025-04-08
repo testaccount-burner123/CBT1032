@@ -1,0 +1,104 @@
+.*/*******************************************************************/
+.*/*                                                                 */
+.*/* NAME:                                                           */
+.*/*  ZPROT                                                          */
+.*/*                                                                 */
+.*/* FUNCTION:                                                       */
+.*/*  Test Storage Protection                                        */
+.*/*                                                                 */
+.*/* DESCRIPTION:                                                    */
+.*/*  Validate a storage address by determining if the storage key   */
+.*/*  and PSW key match. Switch to the caller PSW key and perform    */
+.*/*  fetch and store into the page. An invalid fetch and store      */
+.*/*  will be reflectd by the return code returned to the caller.    */
+.*/*                                                                 */
+.*/* WHY NOT USE TPROT?                                              */
+.*/*  The TPROT instruction does not distinguish between a valid     */
+.*/*  or invalid virtual storage address. When the referenced page   */
+.*/*  is swapped out, TPROT sets CC 3, translation not available.    */
+.*/*                                                                 */
+.*/* ENVIRONMENT:                                                    */
+.*/*  TCB or SRB mode.                                               */
+.*/*  Enabled for I/O and External interrupts.                       */
+.*/*  LOCAL lock may be held but is not required.                    */
+.*/*                                                                 */
+.*/* RACF SECURITY:                                                  */
+.*/*  The caller does NOT require READ authority to profile          */
+.*/*  ZXPC.API.AUTH in resource class XPCCLASS.                      */
+.*/*                                                                 */
+.*/* PARAMETERS:                                                     */
+.*/* ADDR=                                                           */
+.*/*  A parameter that specifies the virtual storage address to be   */
+.*/*  validated. To code, specify the RS-type address, or address    */
+.*/*  in register (2)-(12).                                          */
+.*/*                                                                 */
+.*/* ADDR64=                                                         */
+.*/*  A parameter that specifies the 64-bit virtual storage address  */
+.*/*  to be validated. To code, specify the RS-type address, or      */
+.*/*  address in grande register (2)-(12).                           */
+.*/*                                                                 */
+.*/* R15 - RETURN DODES:                                             */
+.*/*  00 - Fetch and store allowed                                   */
+.*/*  04 - 0C4-4 Protection Exception                                */
+.*/*  08 - 0C5-5 Addressing Exception                                */
+.*/*  12 - 0C4-10 Segment Translation Exception                      */
+.*/*  16 - 0C4-11 Page Translation Exception                         */
+.*/*                                                                 */
+.*/* EXAMPLES:                                                       */
+.*/*  Validate storage address pointed to by register 2.             */
+.*/*                                                                 */
+.*/*   ZPROT ADDR=(2)                                                */
+.*/*                                                                 */
+.*/*  Validate grande storage address pointed by grande register 2.  */
+.*/*                                                                 */
+.*/*   ZPROT ADDR64=(2)                                              */
+.*/*                                                                 */
+.*/*                                                                 */
+.*/* © Copyright Ben Marino. 2021 - 2022 (unpublished)               */
+.*/*                                                                 */
+.*/*******************************************************************/
+.*---------------------------CHANGE LOG-------------------------------*
+.*                                                                    *
+.* ID    Rel    Date       Author        Comments                     *
+.*--------------------------------------------------------------------*
+.* @01 | V1R1 | 12072021 | Ben Marino  | Initial version              *
+.*     |      |          |             |                              *
+.**********************************************************************
+.*-------+---------+---------+---------+---------+---------+---------+*
+         MACRO
+&ZID     ZPROT &ADDR=,&ADDR64=
+.*
+         COPY  ZZGBL
+.*
+         AIF   ('&ADDR64' EQ '').PRO010
+         AIF   ('&ADDR' NE '').TPRO02
+         LAE   15,&TPROT64             .PCID
+         AIF   ('&ADDR64'(1,1) EQ '(').PRO000
+         LG    1,&ADDR64               .grande storage address
+         AGO   .PROCALL
+.*
+.PRO000  ANOP  ,
+         LGR   1,&ADDR64               .grande storage address
+         AGO   .PROCALL
+.*
+.PRO010  ANOP  ,
+         AIF   ('&ADDR' EQ '').ERR1
+         AIF   ('&ADDR64' NE '').ERR2
+         LAE   15,&TPROT               .PCID
+         AIF   ('&ADDR'(1,1) EQ '(').PRO020
+         L     1,&ADDR                 .storage address
+         AGO   .PROCALL
+.*
+.PRO020  ANOP  ,
+         LAE   1,0(&ADDR)              .storage address
+.*
+.PROCALL ANOP  ,
+         ZZMAC GEN=XPC                 .XPCSRV PC router
+         MEXIT ,
+.*
+.**      Macro Notes
+.*
+.ERR1    MNOTE 8,'*** ZPROT - Invalid address operand specified'
+         MEXIT ,
+.ERR2    MNOTE 8,'*** ZPROT - ADDR/ADDR64 are mutually exclusive'
+         MEND

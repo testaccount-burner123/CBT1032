@@ -1,0 +1,118 @@
+         MACRO
+*/*******************************************************************/
+*/*                                                                 */
+*/* Name: ZZASY                                                     */
+*/*                                                                 */
+*/* Description: System event listener routine parm data            */
+*/*                                                                 */
+*/* Notes: Local ZASY resides in SP=130                             */
+*/*        Common ZASY resides in SP=245                            */
+*/*                                                                 */
+*/*******************************************************************/
+*---------------------------CHANGE LOG-------------------------------*
+*                                                                    *
+* ID    Rel    Date       Author        Comments                     *
+*--------------------------------------------------------------------*
+* @01 | V1R1 | 12072021 | Ben Marino  | Initial version              *
+*     |      |          |             |                              *
+**********************************************************************
+*-------+---------+---------+---------+---------+---------+---------+*
+         ZZASY ,
+         COPY  ZZGBL
+ZASY     DSECT ,
+ASYID    DS    CL4'ZASY'    ID
+ASYFLG1  DS    XL1          flags
+ASY@EASC EQU   X'80'        ASCB= supplied indicator
+ASY@ETKN EQU   X'40'        STOKEN= supplied indicator
+ASY@EJOB EQU   X'20'        {JOB=|STC=|TSU=} supplied indicator
+ASY@TALL EQU   X'10'        event triggers for all address spaces
+ASY@CURR EQU   X'08'        listener runs where event triggered
+ASY@COMM EQU   X'04'        CMD=command trigger matched indicator
+ASY@ALIA EQU   X'02'        ALIAS=command trigger matched inicator
+ASY@ABND EQU   X'01'        ABTERM={NO|YES} indicator
+         DS    0X
+ASYFLG2  DS    XL1          flags
+ASY@EP   EQU   X'80'        EP= supplied indicator
+ASY@ZKY  EQU   X'40'        KEY={0|8} indicator
+ASY@ZMD  EQU   X'20'        MODE={SUP|PROB} indicator
+ASY@SRB  EQU   X'10'        EXEC={SRB|TCB} indicator
+ASY@XTCB EQU   X'08'        XTCB= supplied indicator
+ASY@XTTK EQU   X'04'        XTTOKEN= supplied indicator
+ASY@2SV6 EQU   X'02'        -reserved
+ASY@2SV7 EQU   X'01'        -reserved
+         DS    0X
+ASYFLG3  DS    XL1          flags
+         DS    0X
+ASYTYPE  DS    XL1          system event type
+ASY@ZEOM EQU   X'&TEOM'     EOM event
+ASY@ZCMD EQU   X'&TCMD'     CMD event
+ASY@ZWTO EQU   X'&TWTO'     WTO event
+ASY@ZENF EQU   X'&TENF'     ENF event
+ASY@ZSOM EQU   X'&TSOM'     SOM event
+ASY@ZDB2 EQU   X'&TDB2'     DB2 event
+ASY@ZXCF EQU   X'&TXCF'     XCF event
+ASY@ZSVC EQU   X'&TSVC'     SVC event
+         DS    0F
+ASYSRBB  DS    A            SRB block address
+ASYZXVT  DS    A            ZXVT server vector table
+ASYZRWA  DS    A            ZRWA recovery workarea address
+ASYRC    DS    F            RC
+ASYRSN   DS    F            RSN
+         DS    0F
+ASYEP    DS    A            EP      - listener routine EPA
+ASYPARM  DS    F            PARM    - listener routine parameter
+ASYMODNM DS    CL8          LMOD    - listener routine LMOD name
+         DS    0F
+ASYRSV0  DS    AL2          -reserved
+ASYRASID DS    AL2          ASID    - system event requestor
+ASYRTCB  DS    A            TCB     - system event requestor
+ASYRASCB DS    A            ASCB    - system event requestor
+ASYRSTKN DS    XL8          STOKEN  - system event requestor
+ASYRTTKN DS    XL16         TTOKEN  - system event requestor
+         DS    0F
+ASYETCB  DS    A            TCB     - where event triggered
+ASYEASCB DS    A            ASCB    - where event triggered
+ASYEJOBN DS    CL8          JOB     - where event triggered
+ASYESTKN DS    XL8          STOKEN  - where event triggered
+         DS    0F
+ASYTSSOB DS    A            SSOB    - where event triggered
+ASYTRPLY DS    F            REPLYID - where event triggered
+ASYTSYSN DS    CL4          SMFID   - where event triggered
+ASYTJOBN DS    CL8          JOB     - where event triggered
+ASYTPGMN DS    CL8          PGM     - where event triggered
+ASYTLPAR DS    CL8          LPAR    - where event triggered
+ASYTVMID DS    CL8          VMID    - where event triggered
+         DS    0F
+ASYXRV0  DS    AL2          -reserved
+ASYXASID DS    AL2          ASID    - where listener executes
+ASYIRBA  DS    A            IRB     - where listener executes
+ASYXTCB  DS    A            TCB     - where listener executes
+ASYXASCB DS    A            ASCB    - where listener executes
+ASYXJOBN DS    CL8          jobname - where listener executes
+ASYXSTKN DS    XL8          STOKEN  - where listener executes
+ASYXTTKN DS    XL16         TTOKEN  - where listener executes
+ASY@CLR  EQU   *-ZASY       clear length
+         DS    0F
+ASYPLIST DS    XL64         PLIST   - parameter list
+ASYSAVEA DS    XL72         CALLRTM - recovery savearea
+         DS    0C
+ASYEVENT DS    CL72         system event trigger data
+ASYSLACK DS    CL1          slack byte
+ASY@EVNZ EQU   *-ASYEVENT   size
+         DS    0F
+ASYXSSOB DS    CL(SSOBHSIZ) copy of SSOB
+         DS    0F
+ASYXENSG DS    CL(ENSG@SZE) copy of IEFENFSG ENF data
+         DS    0F
+ASYX256  DS    0CL256
+ASYXDATA DS    CL128        copy of {EOM|CMD|WTO} data
+ASYX@DTZ EQU   *-ASYXDATA
+         DS    0F
+ASYXINDV DS    CL128        copy of {SSEN|SSCM|SSWT data
+ASYX@INZ EQU   *-ASYXINDV
+         ORG   ASYX256      ORG
+ASYXENFD DS    CL256        copy of ENF event data
+ASYX@ENZ EQU   *-ASYX256    size
+         DS    0D
+ASY@SIZE EQU   *-ZASY       ZASY entry size
+         MEND  ,

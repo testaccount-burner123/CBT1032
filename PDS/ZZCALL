@@ -1,0 +1,71 @@
+         MACRO
+*/*******************************************************************/
+*/*                                                                 */
+*/* Name: ZZCALL                                                    */
+*/*                                                                 */
+*/* Description: Service request call macro                         */
+*/*                                                                 */
+*/* Notes: None                                                     */
+*/*                                                                 */
+*/*******************************************************************/
+*---------------------------CHANGE LOG-------------------------------*
+*                                                                    *
+* ID    Rel    Date       Author        Comments                     *
+*--------------------------------------------------------------------*
+* @01 | V1R1 | 12072021 | Ben Marino  | Initial version              *
+*     |      |          |             |                              *
+**********************************************************************
+*-------+---------+---------+---------+---------+---------+---------+*
+&ZCALL   ZZCALL &P1,&P2,&RC=,&RSN=,&SR=,&EP=
+.*
+         AIF   ('&P1' EQ '').CALL10
+         AIF   ('&P1'(1,1) EQ '(').CALL00
+         LA    1,&P1                  .parameter
+         AGO   .CALL10
+.*
+.CALL00  ANOP  ,
+         LR    1,&P1                  .parameter
+.*
+.CALL10  ANOP  ,
+         AIF   ('&P2' EQ '').CALL30
+         AIF   ('&P2'(1,1) EQ '(').CALL20
+         L     0,&P2                  .parameter
+         AGO   .CALL30
+.*
+.CALL20  ANOP  ,
+         LR    0,&P2                  .parameter
+.*
+.CALL30  ANOP  ,
+         AIF   ('&SR' EQ '').CALL40
+         AIF   ('&EP' NE '').ERR01
+         L     15,=A(&SR)             .local subroutine EPA
+         BSM   15,0                   .set AMODE
+         BASR  14,15                  .call subroutine
+         AGO   .CALL60
+.*
+.CALL40  ANOP  ,
+         AIF   ('&EP' NE '').CALL50
+         AIF   ('&SR' EQ '').ERR02
+.*
+.CALL50  ANOP  ,
+         L     15,=V(&EP)             .service routine EPA
+         BSM   15,0                   .set AMODE
+         BASR  14,15                  .call routine
+.*
+.CALL60  ANOP  ,
+         AIF   ('&RC' EQ '').CALL70
+         ST    R15,&RC                .save RC
+.*
+.CALL70  ANOP  ,
+         AIF   ('&RSN' EQ '').CALL99
+         ST    0,DSARSN               .save RSN
+.*
+.CALL99  ANOP  ,
+         MEXIT ,
+.*
+.**      Macro Notes
+.*
+.ERR01   MNOTE 8,'*** SR/EP operands are mutually exclusive'
+         MEXIT ,
+.ERR02   MNOTE 8,'*** Invalid SR/EP operand specified'
+         MEND  ,

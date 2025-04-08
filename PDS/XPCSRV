@@ -1,0 +1,2636 @@
+XPCSRV   CSECT
+*/********************************************************************/
+*/*                                                                  */
+*/* Name:        XPCSRV                                              */
+*/*                                                                  */
+*/* Function:    ZXPC server stacking PC router                      */
+*/*                                                                  */
+*/* Description: The ZXPC server allows software products running    */
+*/*              in any address space to call its service routines.  */
+*/*              It supports service callers running in Primary-mode */
+*/*              and AR-mode.                                        */
+*/*                                                                  */
+*/* ZXPC Calls:  The following PC calls are currently supported:     */
+*/*                                                                  */
+*/* ZAUTH        Authorization Facility:                             */
+*/*              Change jobstep authorization by manipulating the    */
+*/*              JSCBAUTH authorization bit.                         */
+*/*                                                                  */
+*/* ZDYNLPA      Dynamic-LPA Facility:                               */
+*/*              Add/delete module to/from dynamic-LPA. The module   */
+*/*              can be added in pageable or fixed storage and write */
+*/*              protected storage.                                  */
+*/*                                                                  */
+*/* ZCOPY        Datamove Facility:                                  */
+*/*              Copy data across address spaces without the use of  */
+*/*              CSA/SQA common storage buffers.                     */
+*/*                                                                  */
+*/* ZFREMEM      Storage Management Facility:                        */
+*/*              Release private storage outside the primary address */
+*/*              space.                                              */
+*/*                                                                  */
+*/* ZGETMEM      Storage Management Facility:                        */
+*/*              Obtain private storage outside the primary address  */
+*/*              space.                                              */
+*/*                                                                  */
+*/* ZLISTEN      System Events Listener Facility:                    */
+*/*              Allowes programs to listen for the occurrence of a  */
+*/*              triggered system event. The facility allows you to  */
+*/*              define routines that receive control when any of    */
+*/*              the following system events occur:                  */
+*/*                                                                  */
+*/*              - Starting tasks                                    */
+*/*              - Terminating tasks                                 */
+*/*              - Starting address spaces                           */
+*/*              - Terminating address spaces                        */
+*/*              - Issued system, subsystem and application commands */
+*/*              - Issued system, subsystem and application WTO/Rs   */
+*/*              - Event Notification Facility (ENF) events          */
+*/*                                                                  */
+*/* ZPROT        Virtual Storage Validation Facility:                */
+*/*              Validate a storage address by determining if the    */
+*/*              storage key and protect key match. Switch to the    */
+*/*              caller's protect key and perform fetch and store    */
+*/*              into the page. An invalid fetch and store will be   */
+*/*              handled by an FRR routine.                          */
+*/*                                                                  */
+*/* Input Regs:  R0   Parameter                                      */
+*/*              R1   Parameter                                      */
+*/*              AR0  Parameter                                      */
+*/*              AR1  Parameter                                      */
+*/*              AR15 Parameter                                      */
+*/*              R15  PCID                                           */
+*/*                                                                  */
+*/* Regs Usage:  R6  XPC  address                                    */
+*/*              R8  FRR  address                                    */
+*/*              R9  ZRWA address                                    */
+*/*              R10 Base address                                    */
+*/*              R11 ZXVT address                                    */
+*/*              R12 DSA  address                                    */
+*/*              R13 Savearea address                                */
+*/*                                                                  */
+*/* Output Regs: R0  Reason code                                     */
+*/*              R1  Output parameter                                */
+*/*              R15 Return code                                     */
+*/*                                                                  */
+*/* Attributes:  TCB-mode; SRB-mode                                  */
+*/*              Primary mode                                        */
+*/*              Caller protect key                                  */
+*/*              Supervisor state                                    */
+*/*              Page-fixed                                          */
+*/*              Write-protected                                     */
+*/*              Dynamic-LPA resident                                */
+*/*                                                                  */
+*/* Copyright:   Ben Marino. 2021 - 2022 (unpublished)               */
+*/*                                                                  */
+*/********************************************************************/
+*---------------------------CHANGE LOG--------------------------------*
+*                                                                     *
+* ID    Rel    Date       Author        Comments                      *
+*---------------------------------------------------------------------*
+* @01 | V1R1 | 12072021 | Ben Marino  | Initial version               *
+*     |      |          |             |                               *
+***********************************************************************
+*--------+---------+---------+---------+---------+---------+---------+*
+XPCSRV   AMODE 31
+XPCSRV   RMODE ANY
+         COPY  ZZGBL
+         BASR  R10,0                   base
+         USING *,R10                   addressability
+         B     XPXMAIN                 branch
+         ZZMAC GEN=MID,SSI=ZSSVT       ID
+*
+**       Obtain dynamic Storage area
+*
+XPXMAIN  DS    0H
+         IPK   ,                       get PC caller key
+         SPKA  X'80'(0)                set problem key
+         STORAGE OBTAIN,LOC=ANY,CALLRKY=YES,                           +
+               LENGTH=DSA@SIZE,SP=130,LINKAGE=SYSTEM
+         LR    R12,R1                  DSA
+         USING DSA,R12                 set addressability
+         LA    R5,DSA@SIZE             DSA size
+         LR    R4,R1                   copy address
+         XR    R15,R15                 zero
+         MVCL  R4,R14                  scrub DSA
+         LA    R13,DSASAVE             savearea address
+         SPKA  0(R2)                   set PC caller key
+         ST    R2,DSAPKEY              save PC caller key
+*
+**       Locate ZXVT vector table
+*
+         USING PSA,0                   FLC
+         L     R11,FLCCVT              CVT address
+         USING CVT,R11                 set addressability
+         L     R11,CVTMSER             MSAS base
+         USING BASE,R11                set addressability
+         CLC   MIDMSAS,=CL4'BASE'      MSAS=BASE?
+         BNE   XPC0000                 no
+         ICM   R11,15,BAMTVTCB         IEEVIPL common TCB?
+         BNZ   XPC0010                 yes
+*
+XPC0000  DS    0H
+         L     R11,BAASCB              MSAS ASCB
+         USING ASCB,R11                set addressability
+         L     R11,ASCBASXB            MSAS commom ASXB
+         USING ASXB,R11                set addressability
+         L     R11,ASXBFTCB            IEEVIPL common TCB
+*
+XPC0010  DS    0H
+         USING TCB,R11                 set addressability
+         L     R11,TCBFSA              ZXVT vector table
+         USING ZXVT,R11                set addressability
+         CLC   ZXVTID,=CL4'ZXVT'       valid indeed?
+         BNE   XPC0020                 no, ABEND
+         TM    ZXVTFLG1,ZXVT@ACT       server active?
+         BNZ   XPC0030                 yes
+         MVC   DSARC,=AL4(16)          error RC
+         MVC   DSARSN,=AL4(RSN160)     error RSN
+         B     XPCEXIT                 exit
+*
+XPC0020  DS    0H
+         MVC   DSARC,=AL4(16)          error RC
+         MVC   DSARSN,=AL4(RSN28)      error RSN
+         B     XPCABEND                ABEND
+*
+**       Extract parameter registers
+*
+XPC0030  DS    0H
+         EREG  R14,R1                  parm GPRs/ARs
+         STM   R14,R1,DSAIPAR          save R14-R1 parm regs
+         STAM  AR14,AR1,DSAIAPAR       save AR14-AR1 parm regs
+         EREGG R14,R1                  grande parm regs
+         STMG  R14,R1,DSAIGPAR         save GR14-GR1 parm regs
+*
+**       Initialize recovery data
+*
+         LA    R9,DSAZRWA              ZRWA address
+         USING ZRWA,R9                 set addressability
+         MVC   ZRWAID,=CL4'ZRWA'       ID
+         ST    R11,ZRWAZXVT            init ZXVT address
+         MVC   ZRWALMOD,MIDNAME        init service module
+         MVC   ZRWASECT,MIDNAME        init service subroutine
+         MVC   ZRWASUBN,ZXVTSUBN       init ZXPC server
+         MVC   DSAMAIN,ZRWALMOD        copy service module name
+         ZZTRC SRV=0,MID=MIDNAME,MOD=XPCSRV
+*
+**       Establish FRR recovery
+*
+         L     R3,XPCFRR               recovery routine
+         BSM   R3,0
+         ST    R3,DSAFRRA              publish XPCFRR EPA
+         ICM   R1,15,PSATOLD           TCB-mode caller?
+         BNZ   XPC0040                 yes
+         SPKA  0(0)                    supervisor key
+         SETFRR A,FRRAD=(3),PARMAD=(8),                                +
+               MODE=PRIMARY,SDWALOC31=YES,CANCEL=NO,                   +
+               WRKREGS=(14,15)
+         USING FRR,R8
+         MVC   FRRID,=CL4'ZFRR'        ID
+         ST    R9,FRRZRWA              set ZRWA address
+         ST    R11,FRRZXVT             set ZXVT address
+         OI    DSAFLG1,DSA@FRR         recovery established
+         ZZRETRY XPCRETRY,RSN=DSARSN   activate recovery
+         ZZTRC SRV=1,SWKEY=NO          trace
+         L     R2,DSAPKEY              PC caller key
+         SPKA  0(R2)                   restore key
+         B     XPC0050                 carry on
+*
+**       Establish ESTAE recovery
+*
+XPC0040  DS    0H
+         L     R3,XPCRTM               recovery routine
+         BSM   R3,0                    set AMODE
+         MVC   DSAESTAE(ESTAEL),ESTAE  listform
+         ESTAE (3),                                                    +
+               PARAM=(9),              DRWA address                    +
+               TOKEN=DSATOKN,          store token here                +
+               MF=(E,DSAESTAE)
+         ST    R15,DSARC               save RC
+         LTR   R15,R15                 successful?
+         BNZ   XPCABEND                no, ABEND
+         OI    DSAFLG1,DSA@STA         recovery established
+         ZZRETRY XPCRETRY,RSN=DSARSN   activate recovery
+         ZZTRC SRV=2                   trace
+*
+**       Locate target PC routine
+*
+XPC0050  DS    0H
+         LA    R6,XPCTABLE             PC routine table
+         USING XPC,R6                  set addressability
+         MVC   DSARC,=AL4(RC16)        set RC
+         MVC   DSARSN,=AL4(RSN4)       set RSN
+         MVC   DSATRPC,DSAPCID         set trace PCID
+         MVC   DSATRC,MIDNAME          set trace function
+         MVC   DSATRSF,MIDNAME         set trace subfunction
+*
+XPC0060  DS    0H
+         CLC   XPCEPA,XPCTBND          PC table end?
+         BE    XPCABEND                yes, error
+         CLC   XPCPCID,DSAPCID         PCID match?
+         BE    XPC0070                 yes
+         LA    R6,XPC@SIZE(,R6)        next entry
+         B     XPC0060                 locate PC entry
+*
+**       Check caller authorization
+*
+XPC0070  DS    0H
+         ICM   R1,15,PSATOLD           SRB-mode caller?
+         BZ    XPC0080                 yes, authorized
+         TM    ZXVTFLG2,ZXVT@SAF       SAF={class}?
+         BZ    XPC0080                 no, skip SAF call
+         CLI   XPCSAF,XPC@CALL         PC require SAF call?
+         BNE   XPC0080                 no
+         TESTAUTH FCTN=1
+         LTR   R15,R15                 APF-authorized?
+         BZ    XPC0080                 yes
+         ZZCALL SR=SAFCALL             SAF subroutine
+         CLC   DSAXRC,=AL4(RC0)        SAF RC okay?
+         BNE   XPCABEND                no, ABEND
+         CLC   DSARC,=AL4(RC0)         RACF authorized?
+         BNE   XPCABEND                no, ABEND
+         ZZTRC SRV=3                   trace
+*
+**       Validity check request
+*
+XPC0080  DS    0H
+         MVC   DSATRSF,XPCEPNAM        trace
+         ICM   R1,15,PSATOLD           TCB-mode caller?
+         BNZ   XPC0099                 yes
+         CLI   XPCMODE,XPC@SRBM        SRB-mode allowed?
+         BE    XPC0099                 yes
+         MVC   DSARC,=AL4(RC8)         error RC
+         MVC   DSARSN,=AL4(RSN32)      error RSN
+         ZZTRC SRV=4                   trace
+         B     XPCABEND                ABEND
+*
+**       Call target PC-routine
+*
+XPC0099  DS    0H
+         L     R15,XPCEPA              PC routine EPA
+         BSM   R15,0                   set AMODE
+         BASR  R14,R15                 call target PC
+         ZZTRC SRV=5                   trace
+         ZZRETRY OFF                   disable recovery
+*---------------------------------------------------------------------*
+*        Normal Exit                                                  *
+*--------+---------+---------+---------+---------+---------+---------+*
+XPCEXIT  DS    0H
+         L     R2,DSAPKEY              PC caller key
+         SPKA  0(R2)                   restore key
+         TM    DSAFLG1,DSA@STA         ESTAE recovery active?
+         BZ    XPCXIT00                no
+         ESTAE 0,TOKEN=DSATOKN         deactivate recovery
+         NI    DSAFLG1,XFF-DSA@STA     ESTAE deleted
+*
+XPCXIT00 DS    0H
+         LM    R3,R5,DSAOPAR           protect RC, RSN, R1
+         SPKA  X'80'(0)                set problem key
+         STORAGE RELEASE,COND=NO,CALLRKY=YES,                          +
+               ADDR=(R12),LENGTH=DSA@SIZE,SP=130,LINKAGE=SYSTEM
+         LR    R15,R3                  RC
+         LR    R0,R4                   RSN
+         LR    R1,R5                   R1
+         PR    ,                       exit
+*---------------------------------------------------------------------*
+*        Recovery Exit
+*--------+---------+---------+---------+---------+---------+---------+*
+XPCRETRY DS    0H
+         TM    DSAFLG1,DSA@FRR         FRR recovery active?
+         BZ    XPCRTY00                no
+         SPKA  0(0)                    supervisor key
+         SETFRR D,WRKREGS=(14,15)      deactivate recovery
+         NI    DSAFLG1,XFF-DSA@FRR     FRR deleted
+         B     XPCABEND                ABEND
+*
+XPCRTY00 DS    0H
+         TM    DSAFLG1,DSA@STA         ESTAE recovery active?
+         BZ    XPCABEND                no
+         ESTAE 0,TOKEN=DSATOKN         deactivate recovery
+         NI    DSAFLG1,XFF-DSA@STA     ESTAE deleted
+*---------------------------------------------------------------------*
+*        ABEND Exit                                                   *
+*--------+---------+---------+---------+---------+---------+---------+*
+XPCABEND DS    0H
+         L     R15,=A(ABENDPC)         ABEND subroutine
+         BSM   R15,0                   set AMODE
+         BR    R15                     ABEND
+*---------------------------------------------------------------------*
+*        Constants                                                    *
+*--------+---------+---------+---------+---------+---------+---------+*
+         DS    0F
+XPCFRR   DC    V(XPCFRR)             FRR recovery
+XPCRTM   DC    V(XPCRTM)             ESTAE recovery
+         DS    0F
+ESTAE    ESTAE 0,MF=L                listform
+ESTAEL   EQU   *-ESTAE
+*/********************************************************************/
+*/*                                                                  */
+*/*    PC routine table parameters:                                  */
+*/*                                                                  */
+*/*      EP=    Defines the PC routine entry point address.          */
+*/*                                                                  */
+*/*      MODE=  Defines allowed callers of the the PC routine.       */
+*/*             TCB    - TCB-mode callers only                       */
+*/*             SRB    - SRB-mode and TCB-mode callers               */
+*/*                                                                  */
+*/*      SAF=   Defines if caller authorization checking is          */
+*/*             required to invoke the PC routine.                   */
+*/*             CALL   - SAF call required                           */
+*/*             NOCALL - SAF call not required                       */
+*/*                                                                  */
+*/*      PCID=  Defines the PC routine routing code.                 */
+*/*                                                                  */
+*/********************************************************************/
+*/*------+---------+---------+---------+---------+---------+---------*/
+XPCTABLE DS    0F
+         ZZTAB GEN=PCE,TYPE=INITIAL
+*
+         ZZTAB GEN=PCE,                                                +
+               TYPE=ENTRY,                                             +
+               EP=TPROT,             TPROT EPA                         +
+               MODE=SRB,             TCB & SRB callers allowed         +
+               SAF=NOCALL,           SAF call not required             +
+               PCID=&TPROT           PCID (ADDR)
+*
+         ZZTAB GEN=PCE,                                                +
+               TYPE=ENTRY,                                             +
+               EP=TPROT,             TPROT EPA                         +
+               MODE=SRB,             TCB & SRB callers allowed         +
+               SAF=NOCALL,           SAF call not required             +
+               PCID=&TPROT64         PCID (ADDR64)
+*
+         ZZTAB GEN=PCE,                                                +
+               TYPE=ENTRY,                                             +
+               EP=LISTEN,            LISTEN EPA                        +
+               MODE=SRB,             TCB & SRB callers allowed         +
+               SAF=CALL,             SAF call required                 +
+               PCID=&LISTEN          PCID
+*
+         ZZTAB GEN=PCE,                                                +
+               TYPE=ENTRY,                                             +
+               EP=DELZXRE,           DELZXRE EPA                       +
+               MODE=SRB,             TCB & SRB callers allowed         +
+               SAF=CALL,             SAF call required                 +
+               PCID=&LISTNDL         PCID
+*
+         ZZTAB GEN=PCE,                                                +
+               TYPE=ENTRY,                                             +
+               EP=DYNLPA,            DYNLPA EPA                        +
+               MODE=TCB,             only TCB callers allowed          +
+               SAF=CALL,             SAF call required                 +
+               PCID=&DYNLPA          PCID
+*
+         ZZTAB GEN=PCE,                                                +
+               TYPE=ENTRY,                                             +
+               EP=AUTH,              AUTH EPA                          +
+               MODE=TCB,             only TCB callers allowed          +
+               SAF=CALL,             SAF call required                 +
+               PCID=&AUTH            PCID
+*
+         ZZTAB GEN=PCE,                                                +
+               TYPE=ENTRY,                                             +
+               EP=GETMEM,            GETMEM EPA                        +
+               MODE=SRB,             TCB & SRB callers allowed         +
+               SAF=CALL,             SAF call required                 +
+               PCID=&GETMEM          PCID
+*
+         ZZTAB GEN=PCE,                                                +
+               TYPE=ENTRY,                                             +
+               EP=FREMEM,            FREMEM EPA                        +
+               MODE=SRB,             TCB & SRB callers allowed         +
+               SAF=CALL,             SAF call required                 +
+               PCID=&FREMEM          PCID
+*
+         ZZTAB GEN=PCE,                                                +
+               TYPE=ENTRY,                                             +
+               EP=COPY,              COPY EPA                          +
+               MODE=SRB,             TCB & SRB callers allowed         +
+               SAF=CALL,             SAF call required                 +
+               PCID=&COPY            PCID
+*
+         ZZTAB GEN=PCE,                                                +
+               TYPE=ENTRY,                                             +
+               EP=MODEL,             MODEL PC routine                  +
+               MODE=TCB,             only TCB callers allowed          +
+               SAF=CALL,             SAF call required                 +
+               PCID=&MODEL           PCID
+*
+         ZZTAB GEN=PCE,TYPE=FINAL
+*
+XPCTABSZ EQU   *-XPCTABLE
+         DS    0F
+XPCTBND  DC    AL4(-1)               end-of-table marker
+*---------------------------------------------------------------------*
+*        SSVT Server vector table                                     *
+*--------+---------+---------+---------+---------+---------+---------+*
+         ZZTAB GEN=SSI,DSECT=NO      prebuilt SSVT
+*---------------------------------------------------------------------*
+*        Literals                                                     *
+*--------+---------+---------+---------+---------+---------+---------+*
+         LTORG ,
+         DROP  ,
+*/********************************************************************/
+*/*                                                                  */
+*/* Name:        TPROT                                               */
+*/*                                                                  */
+*/* Function:    Test Protection PC Routine                          */
+*/*                                                                  */
+*/* Description: Validate a storage address by determining if the    */
+*/*              storage key and protect key match. Switch to the    */
+*/*              caller's protect key and perform fetch and store    */
+*/*              into the page. An invalid fetch and store will be   */
+*/*              handled by the FRR routine.                         */
+*/*                                                                  */
+*/* Why?         The TPROT instruction does not distinguish between  */
+*/*              a valid/invalid virtual storage address. When the   */
+*/*              referenced page is swapped out TPROT sets CC 3,     */
+*/*              translation not available.                          */
+*/*                                                                  */
+*/* Environment: TCB or SRB mode.                                    */
+*/*              Enabled for I/O and External interrupts.            */
+*/*              LOCAL lock may be held but is not required.         */
+*/*                                                                  */
+*/* Macro Call:  ZPROT                                               */
+*/*                                                                  */
+*/* Security:    None required.                                      */
+*/*                                                                  */
+*/* Input Regs:  DSAIGR1 storage address                             */
+*/*              DSAPCID PCID router code                            */
+*/*              R9  ZRWA address                                    */
+*/*              R11 ZXVT address                                    */
+*/*              R12 DSA  address                                    */
+*/*              R13 Router savearea address                         */
+*/*              R14 Return address                                  */
+*/*              R15 Entry address                                   */
+*/*                                                                  */
+*/* Regs Usage:  R8  FRR  address                                    */
+*/*              R9  ZRWA address                                    */
+*/*              R10 Base address                                    */
+*/*              R11 ZXVT address                                    */
+*/*              R12 DSA  address                                    */
+*/*              R13 Savearea address                                */
+*/*                                                                  */
+*/* Output Regs: R0  - R14 restored                                  */
+*/*              R15 - return code                                   */
+*/*               00 - address is valid                              */
+*/*               04 - 0C4-4  Protection Exception                   */
+*/*               08 - 0C5-5  Addressing Exception                   */
+*/*               12 - 0C4-10 Segment Translation Exception          */
+*/*               16 - 0C4-11 Page Translation Exception             */
+*/*               20 - Internal service routine failure              */
+*/*                                                                  */
+*/********************************************************************/
+*/-------+---------+---------+---------+---------+---------+---------*/
+TPROT    DS    0H
+         USING ZRWA,R9
+         USING ZXVT,R11
+         USING DSA,R12
+         B     12(,R15)
+*
+TPROID   DC    CL8'TPROT'              PC routine
+         STM   R14,R12,GPR@R14(R13)    save caller's regs
+         LR    R10,R15                 set base address
+         USING TPROT,R10               base addressability
+         LA    R1,DSAPCSA              PC routine savearea
+         ST    R13,GPR@BWD(,R1)        chain,
+         ST    R1,GPR@FWD(,R13)        save,
+         LR    R13,R1                  areas.
+         MVC   ZRWASECT,TPROID         ID
+*
+**       Obtain LOCAL lock
+*
+         ZZCALL DSAZXSA,EP=GETLOCL     serialize address space
+         OI    DSAFLG1,DSA@LRL         lock release required
+         ZZTRC SRV=A,MID=TPROID,MOD=XPCSRV
+*
+**       Establish FRR recovery
+*
+TPRO000  DS    0H
+         L     R3,DSAFRRA              XPCFRR EPA
+         SETFRR A,FRRAD=(3),PARMAD=(8),                                +
+               SDWALOC31=YES,WRKREGS=(14,15)
+         USING FRR,R8
+         MVC   FRRID,=CL4'ZFRR'        ID
+         MVI   FRRXRC,X'20'            initial PIC RC
+         OI    FRRFLG1,FRR@PICC        PIC code requested
+         ST    R9,FRRZRWA              set ZRWA address
+         ST    R11,FRRZXVT             set ZXVT address
+         ZZRETRY TPRO099,RSN=DSARSN    activate recovery
+         ZZTRC SRV=B                   trace
+*
+**       Perform fetch and store
+*
+         CLC   DSAPCID,=AL4(8)         grande request?
+         BE    TPRO020                 yes
+         L     R2,DSAPKEY              PC caller key
+         SPKA  0(R2)                   switch key
+         L     R1,DSAIGR1              storage address
+         L     R3,0(,R1)               get word from storage
+         ZZTRC SRV=C                   trace
+*
+TPRO010  DS    0H
+         CS    R3,R3,0(R1)             fetch & store
+         BNZ   TPRO010                 changed; try again
+         SPKA  0(0)                    supervisor key
+         XC    FRRXRC,FRRXRC           set RC=0
+         ZZTRC SRV=D                   trace
+         B     TPRO099                 exit
+*
+**       Perform grande fetch and store
+*
+TPRO020  DS    0H
+         L     R2,DSAPKEY              PC caller key
+         SPKA  0(R2)                   switch key
+         LG    R1,DSAIGGR1             storage address
+         LG    R3,0(,R1)               get word from storage
+         ZZTRC SRV=E                   trace
+*
+TPRO030  DS    0H
+         CSG   R3,R3,0(R1)             fetch & store
+         BNZ   TPRO030                 changed; try again
+         SPKA  0(0)                    supervisor key
+         XC    FRRXRC,FRRXRC           set RC=0
+         ZZTRC SRV=F                   trace
+*
+**       Delete FRR recovery
+*
+TPRO099  DS    0H
+         XR    R15,R15                 zero
+         IC    R15,FRRXRC              get RC
+         ST    R15,DSARC               return RC to caller
+         SETFRR D,WRKREGS=(14,15)      delete FRR
+         ZZTRC SRV=G                   trace
+*
+**       Release LOCAL lock
+*
+         TM    DSAFLG1,DSA@LRL         lock release required?
+         BZ    TPROXIT                 no
+         ZZCALL DSAZXSA,EP=FRELOCL     release serialization
+         NI    DSAFLG1,XFF-DSA@LRL     reset lock indicator
+         ZZTRC SRV=H                   trace
+*
+**       Exit linkage
+*
+TPROXIT  DS    0H
+         L     R13,GPR@BWD(,R13)       mainline savearea
+         LM    R14,R12,GPR@R14(R13)    restore mainline regs
+         BR    R14                     return
+*---------------------------------------------------------------------*
+*        Constants/Literals                                           *
+*--------+---------+---------+---------+---------+---------+---------+*
+         LTORG ,
+         DROP  ,
+*/********************************************************************/
+*/*                                                                  */
+*/* Name:        DYNLPA                                              */
+*/*                                                                  */
+*/* Function:    Dynamic-LPA PC routine                              */
+*/*                                                                  */
+*/* Description: Load and delete modules to/from dynamic LPA         */
+*/*                                                                  */
+*/* Environment: TCB mode.                                           */
+*/*              Enabled for I/O and External interrupts.            */
+*/*              The caller must not be locked.                      */
+*/*                                                                  */
+*/* Macro Call:  ZDYNLPA                                             */
+*/*                                                                  */
+*/* Security:    When SAF=NOCALL is specified, security checks are   */
+*/*              bypassed. When SAF=XPCCLASS is specified, the PC    */
+*/*              caller must have READ authority to ZXPC.API.AUTH    */
+*/*              profile in resource class XPCCLASS.                 */
+*/*                                                                  */
+*/* Input Regs:  DSAIGR1 - ZZDYN listform address                    */
+*/*              DSAPCID - PCID router code                          */
+*/*              R9  ZRWA address                                    */
+*/*              R11 ZXVT address                                    */
+*/*              R12 DSA address                                     */
+*/*              R13 Router savearea address                         */
+*/*              R14 Return address                                  */
+*/*              R15 Entry address                                   */
+*/*                                                                  */
+*/* Regs Usage:  R7  LPMEA/LPMED address                             */
+*/*              R9  ZRWA address                                    */
+*/*              R10 Base address                                    */
+*/*              R11 ZXVT address                                    */
+*/*              R12 DSA address                                     */
+*/*              R13 Savearea address                                */
+*/*                                                                  */
+*/* Output Regs: R1  Loaded entry point address                      */
+*/*              R15 Return code                                     */
+*/*               00 - Dynamic-LPA completed successfully            */
+*/*               04 - CSVDYLPA add/delete warning                   */
+*/*               08 - Dynamic-LPA add/delete failed                 */
+*/*                                                                  */
+*/*              R0  Reason codes                                    */
+*/*               00000000 - Request completed successfully          */
+*/*               00000076 - DYN failed validity checks              */
+*/*               00000080 - Unknown Dynamic-LPA request             */
+*/*               00000401 - CSVDYLPA - module not found             */
+*/*                                                                  */
+*/* ADD Output:  DYNADDR  - Entry point address                      */
+*/*              DYNLEN   - Module length                            */
+*/*              DYNTOKEN - token                                    */
+*/*                                                                  */
+*/* DELETE Output: None                                              */
+*/*                                                                  */
+*/********************************************************************/
+*/-------+---------+---------+---------+---------+---------+---------*/
+DYNLPA   DS    0H
+         USING ZRWA,R9
+         USING ZXVT,R11
+         USING DSA,R12
+         B     12(,R15)
+*
+DYNLID   DC    CL8'DYNLPA'             PC routine
+         STM   R14,R12,GPR@R14(R13)    save caller's regs
+         LR    R10,R15                 set base address
+         USING DYNLPA,R10              base addressability
+         LA    R1,DSAPCSA              PC routine savearea
+         ST    R13,GPR@BWD(,R1)        chain,
+         ST    R1,GPR@FWD(,R13)        save,
+         LR    R13,R1                  areas.
+         MVC   ZRWASECT,DYNLID         ID
+*
+**       Serialize Dynamic-LPA
+*
+         MVC   DSAEQDQ(CSVENQL),CSVENQ init listform
+         ENQ   MF=(E,DSAEQDQ)          serialize resource
+         OI    DSAFLG1,DSA@ENQ         set ENQ indicator
+         ZZTRC SRV=A,MID=DYNLID,MOD=XPCSRV
+*
+**       Validity check Dynamic-LPA request
+*
+         MVC   DSARC,=AL4(8)           set RC
+         L     R6,DSAIGR1              ZDYN address
+         USING DYN,R6                  set addressability
+         CLC   DYNID,=CL4'DYN'         listform valid?
+         BE    DYN0000                 yes
+         MVC   DSARSN,=AL4(RSN76)      set error RSN
+         ZZTRC SRV=B                   trace
+         B     DYN0999                 exit
+*
+DYN0000  DS    0H
+         CLI   DYNREQ,DYN@ADD          ADD request?
+         BE    DYN0100                 yes
+         CLI   DYNREQ,DYN@CUR          DELETE current?
+         BE    DYN0200                 yes
+         CLI   DYNREQ,DYN@TKN          DELETE by token request?
+         BE    DYN0300                 yes
+         MVC   DSARSN,=AL4(RSN80)      set error RSN
+         ZZTRC SRV=C                   trace
+         B     DYN0999                 exit
+*
+**       Dynamic-LPA ADD service
+*
+DYN0100  DS    0H
+         LA    R7,DSADYLPA
+         USING LPMEA,R7
+         XC    DSADYLPA(LPMEA_LEN),DSADYLPA
+         MVC   LPMEANAME,DYNMOD        module name
+         CLI   DYNPAGE,DYN@PGFX        page fix module?
+         BNE   DYN0110                 no
+         OI    LPMEAINPUTFLAGS0,LPMEAFIXED  yes
+         ZZTRC SRV=D                   trace
+*
+DYN0110  DS    0H
+         CLI   DYNOWNR,DYN@SYS         system owner?
+         BNE   DYN0120                 no
+         OI    LPMEAINPUTFLAGS0,LPMEASTORAGEOWNERSYSTEM
+*
+DYN0120  DS    0H
+         SPKA  0(0)
+         CSVDYLPA REQUEST=ADD,                                         +
+               MODINFO=(R7),                                           +
+               MODINFOTYPE=MEMBERLIST, by member name                  +
+               BYADDR=NO,              fetch required                  +
+               NUMMOD=LMODCNT,         module add count                +
+               DDNAME=DYNDDN,          ADD MOD from specified DDname   +
+               APFREQUIRED=YES,        library must be APF-authorized  +
+               SECMODCHECK=YES,        do FACILITY class check         +
+               REQUESTOR=LMODREQ,      requesting subsysytem ID        +
+               RETCODE=DSARC,          return RC here                  +
+               RSNCODE=DSARSN,         return RSN here                 +
+               MF=(E,DYLPAL)           listform
+         L     R2,DSAPKEY              PC caller key
+         SPKA  0(R2)                   switch key
+         MVC   DYNRC,DSARC             copy RC
+         MVC   DYNRSN,DSARSN           copy RSN
+         CLC   DSARC,=AL4(RC0)         successful?
+         BNE   DYN0999                 no
+         MVC   DYNTOKEN,LPMEADELETETOKEN  copy delete token
+         MVC   DYNADDR,LPMEALOADPOINTADDR  copy MOD address
+         MVC   DYNLEN,LPMEAMODLEN      copy MOD size
+         MVC   DSAOGR1,LPMEALOADPOINTADDR  set output parm w/EPA
+         ZZTRC SRV=E                   trace
+         B     DYN0999                 exit
+         DROP  R7
+*
+**       Dynamic-LPA DELETE current
+*
+DYN0200  DS    0H
+         LA    R7,DSADYLPA
+         USING LPMED,R7
+         XC    DSADYLPA(LPMED_LEN),DSADYLPA
+         MVC   LPMEDNAME,DYNMOD        module name
+         SPKA  0(0)
+         CSVDYLPA REQUEST=DELETE,                                      +
+               MODINFO=(R7),                                           +
+               TYPE=CURRENT,           delete current instance         +
+               NUMMOD=LMODCNT,         module delete count             +
+               SECMODCHECK=YES,        do FACILITY class check         +
+               RETCODE=DSARC,          return RC here                  +
+               RSNCODE=DSARSN,         return RSN here                 +
+               MF=(E,DYLPAL)           listform
+         L     R2,DSAPKEY              PC caller key
+         SPKA  0(R2)                   switch key
+         MVC   DYNRC,DSARC             copy RC
+         MVC   DYNRSN,DSARSN           copy RSN
+         CLC   DSARC,=AL4(RC0)         successful?
+         BE    DYN0999                 yes
+         CLC   DSARC,=XL4'00000004'    warning RC?
+         BNE   DYN0999                 no
+         CLC   DSARSN,=XL4'00000401'   not found RSN?
+         BNE   DYN0999                 no, exit
+         XC    DSARC,DSARC             set RC
+         XC    DYNRC,DYNRC             set RC
+         ZZTRC SRV=F                   trace
+         B     DYN0999                 exit
+*
+**       Dynamic-LPA DELETE by token
+*
+DYN0300  DS    0H
+         LA    R7,DSADYLPA
+         USING LPMED,R7
+         XC    DSADYLPA(LPMED_LEN),DSADYLPA
+         MVC   LPMEDNAME,DYNMOD        module name
+         MVC   LPMEDDELETETOKEN,DYNTOKEN  token
+         SPKA  0(0)
+         CSVDYLPA REQUEST=DELETE,                                      +
+               MODINFO=(R7),                                           +
+               TYPE=BYTOKEN,           delete by token                 +
+               NUMMOD=LMODCNT,         module delete count             +
+               SECMODCHECK=YES,        do FACILITY class check         +
+               RETCODE=DSARC,          return RC here                  +
+               RSNCODE=DSARSN,         return RSN here                 +
+               MF=(E,DYLPAL)           listform
+         L     R2,DSAPKEY              PC caller key
+         SPKA  0(R2)                   switch key
+         MVC   DYNRC,DSARC             copy RC
+         MVC   DYNRSN,DSARSN           copy RSN
+         CLC   DSARC,=AL4(RC0)         successful?
+         BE    DYN0999                 yes
+         CLC   DSARC,=XL4'00000004'    warning RC?
+         BNE   DYN0999                 no
+         CLC   DSARSN,=XL4'00000401'   not found RSN?
+         BNE   DYN0999                 no
+         XC    DSARC,DSARC             set RC
+         XC    DYNRC,DYNRC             set RC
+         ZZTRC SRV=G                   trace
+         B     DYN0999                 exit
+         DROP  R7
+*
+**       Release Dynamic-LPA serialization
+*
+DYN0999  DS    0H
+         MVC   DSAEQDQ(CSVDEQL),CSVDEQ init listform
+         DEQ   MF=(E,DSAEQDQ)          release serialization
+         NI    DSAFLG1,XFF-DSA@ENQ     reset ENQ indicator
+         ZZTRC SRV=H                   trace
+*---------------------------------------------------------------------*
+*        Exit                                                         *
+*--------+---------+---------+---------+---------+---------+---------+*
+DYNEXIT  DS    0H
+         L     R13,GPR@BWD(,R13)       mainline savearea
+         LM    R14,R12,GPR@R14(R13)    restore regs
+         BR    R14                     return
+*---------------------------------------------------------------------*
+*        Dynamic LPA ADD/DELETE serialization                         *
+*--------+---------+---------+---------+---------+---------+---------+*
+         DS    0F
+CSVENQ   ENQ   (CSVMAJ,CSVMIN,E,8,SYSTEM),RET=HAVE,MF=L
+CSVENQL  EQU   *-CSVENQ
+         DS    0F
+CSVDEQ   DEQ   (CSVMAJ,CSVMIN,8,SYSTEM),MF=L
+CSVDEQL  EQU   *-CSVDEQ
+         DS    0C
+CSVMAJ   DC    CL8'SYSZCSV'            Major name
+CSVMIN   DC    CL8'CSVDYLPA'           Minor name
+*---------------------------------------------------------------------*
+*        Constants/Literals                                           *
+*--------+---------+---------+---------+---------+---------+---------+*
+         DS    0F
+LMODCNT  DC    F'1'                    module fetch count
+LMODREQ  DC    CL16'ZXPC&REL.XPCSRV'   LPA add requestor
+         LTORG ,
+         DROP  ,
+*/********************************************************************/
+*/*                                                                  */
+*/* Name:        AUTH                                                */
+*/*                                                                  */
+*/* Function:    Authorization PC routine                            */
+*/*                                                                  */
+*/* Description: Change jobstep task authorization as requested      */
+*/*              by PC caller by setting JSCBAUTH bit on or off.     */
+*/*                                                                  */
+*/* Environment: TCB mode.                                           */
+*/*              Enabled for I/O and External interrupts.            */
+*/*              The LOCAL lock may be held but is not required.     */
+*/*                                                                  */
+*/* Macro Call:  ZAUTH                                               */
+*/*                                                                  */
+*/* Security:    When SAF=NOCALL is specified, security checks are   */
+*/*              bypassed. When SAF=XPCCLASS is specified, the PC    */
+*/*              caller must have READ authority to ZXPC.API.AUTH    */
+*/*              profile in resource class XPCCLASS.                 */
+*/*                                                                  */
+*/* Input Regs:  R11 ZXVT address                                    */
+*/*              R9  ZRWA address                                    */
+*/*              R12 DSA address                                     */
+*/*                  DSAIGR0 - Authorization code                    */
+*/*                   1 = Set JSCBAUTH bit on                        */
+*/*                   2 = Set JSCBAUTH bit off                       */
+*/*                   3 = Set PSW key=0, Supervisor state            */
+*/*                   4 = Set PSW key=8, Problem state               */
+*/*                  DSAPCID - PCID router code                      */
+*/*              R13 Router savearea address                         */
+*/*              R14 Return address                                  */
+*/*              R15 Entry address                                   */
+*/*                                                                  */
+*/* Regs usage:  R9  ZRWA address                                    */
+*/*              R10 Base address                                    */
+*/*              R11 ZXVT address                                    */
+*/*              R12 DSA address                                     */
+*/*              R13 Savearea address                                */
+*/*                                                                  */
+*/* Output Regs: R0  Reasom code                                     */
+*/*              R15 Return code                                     */
+*/*                                                                  */
+*/********************************************************************/
+*/-------+---------+---------+---------+---------+---------+---------*/
+AUTH     DS    0H
+         USING ZRWA,R9
+         USING ZXVT,R11
+         USING DSA,R12
+         B     12(,R15)
+AUTHID   DC    CL8'AUTH'               PC routine
+         STM   R14,R12,GPR@R14(R13)    save caller's regs
+         LR    R10,R15                 set base address
+         USING AUTH,R10                base addressability
+         LA    R1,DSAPCSA              PC routine savearea
+         ST    R13,GPR@BWD(,R1)        chain,
+         ST    R1,GPR@FWD(,R13)        save,
+         LR    R13,R1                  areas.
+         MVC   ZRWASECT,AUTHID         ID
+*
+**       Set JSCB authorization
+*
+         USING PSA,0
+         L     R4,PSATOLD              TCB
+         USING TCB,R4                  set addressability
+         L     R3,TCBJSCB              JSCB address
+         USING IEZJSCB,R3              set addressability
+         CLC   DSAIGR0,AUTHON          ZAUTH ON call?
+         BNE   AUTH020                 no
+         SPKA  0(0)                    supervisor key
+         OI    JSCBOPTS,JSCBAUTH       set authorization
+         L     R2,DSAPKEY              PC caller key
+         SPKA  0(R2)                   switch key
+         XC    DSARC,DSARC             set RC
+         ZZTRC SRV=A,MID=AUTHID,MOD=XPCSRV
+         B     AUTHEXIT                exit
+*
+**       Reset JSCB authorization
+*
+AUTH020  DS    0H
+         CLC   DSAIGR0,AUTHOFF         ZAUTH OFF call?
+         BNE   AUTH099                 no
+         SPKA  0(0)                    supervisor key
+         NI    JSCBOPTS,XFF-JSCBAUTH   reset authorizarion
+         L     R2,DSAPKEY              PC caller key
+         SPKA  0(R2)                   switch key
+         XC    DSARC,DSARC             set RC
+         ZZTRC SRV=B                   trace
+         B     AUTHEXIT                exit
+*
+AUTH099  DS    0H
+         MVC   DSARC,=AL4(RC8)         error RC
+         MVC   DSARSN,=AL4(RSN40)      error RSN
+*---------------------------------------------------------------------*
+*        Exit                                                         *
+*--------+---------+---------+---------+---------+---------+---------+*
+AUTHEXIT DS    0H
+         L     R13,GPR@BWD(,R13)       mainline savearea
+         LM    R14,R12,GPR@R14(R13)    restore regs
+         BR    R14                     return
+*---------------------------------------------------------------------*
+*        Constants                                                    *
+*--------+---------+---------+---------+---------+---------+---------+*
+         DS    0F
+AUTHON   DC    F'1'                    JSCB authorize PCID
+AUTHOFF  DC    F'2'                    JSCB unauthorize PCID
+*---------------------------------------------------------------------*
+*        Literals                                                     *
+*--------+---------+---------+---------+---------+---------+---------+*
+         LTORG ,
+         DROP  ,
+*/********************************************************************/
+*/*                                                                  */
+*/* Name:        LISTEN                                              */
+*/*                                                                  */
+*/* Function:    System events listener PC routine                   */
+*/*                                                                  */
+*/* Description: Allowes programs to listen for the occurrence       */
+*/*              of triggered system event.                          */
+*/*                                                                  */
+*/* Macro Call:  ZLISTEN                                             */
+*/*                                                                  */
+*/* Security:    When SAF=NOCALL is specified, security checks are   */
+*/*              bypassed. When SAF=XPCCLASS is specified, the PC    */
+*/*              caller must have READ authority to ZXPC.API.AUTH    */
+*/*              profile in resource class XPCCLASS.                 */
+*/*                                                                  */
+*/* Input Regs:  DSAIGR1 - ZXRE address                              */
+*/*              DSAPCID - PCID router code                          */
+*/*              R9  ZRWA local address                              */
+*/*              R11 ZXVT address                                    */
+*/*              R12 DSA address                                     */
+*/*              R13 Router savearea address                         */
+*/*              R14 Return address                                  */
+*/*              R15 Entry address                                   */
+*/*                                                                  */
+*/* Regs Usage:  R8  ZXRE address                                    */
+*/*              R9  ZRWA address                                    */
+*/*              R11 ZXVT address                                    */
+*/*              R10 Base address                                    */
+*/*              R12 DSA  address                                    */
+*/*              R13 Savearea address                                */
+*/*                                                                  */
+*/* Output Regs: R1  Output parameter                                */
+*/*              R15 Return code                                     */
+*/*               00 - Listener routine successfully defined         */
+*/*               08 - Listener routine define failed                */
+*/*                                                                  */
+*/*              R0  Reason codes                                    */
+*/*               00000000 - Listener routine defined                */
+*/*               00000112 - ZXRE element address is invalid         */
+*/*               00000120 - ZXRE element failed validity check      */
+*/*               00000124 - ZXRE cell element obtain failed         */
+*/*               00000128 - TCBTOKEN for current TCB failed         */
+*/*               00000132 - Listener routine define failed          */
+*/*               00000136 - Invalid event type specified            */
+*/*               00000140 - Abnormally terminated                   */
+*/*               00000144 - EXEC=SRB allowed w/SUP=YES specified    */
+*/*               00000148 - KEY=0 allowed w/SUP=YES specified       */
+*/*               00000152 - MODE=SUP allowed w/SUP=YES specified    */
+*/*               00000156 - SIGNAL(ENF) rtn terminated abnormally   */
+*/*               00000160 - ENFREQ ACTION=LISTEN failed             */
+*/*                                                                  */
+*/********************************************************************/
+*/-------+---------+---------+---------+---------+---------+---------*/
+LISTEN   DS    0H
+         USING ZRWA,R9
+         USING ZXVT,R11
+         USING DSA,R12
+         B     12(,R15)
+*
+LSTNID   DC    CL8'LISTEN'             PC routine
+         STM   R14,R12,GPR@R14(R13)    save caller's regs
+         LR    R10,R15                 set base address
+         USING LISTEN,R10              base addressability
+         LA    R1,DSAPCSA              PC routine savearea
+         ST    R13,GPR@BWD(,R1)        chain,
+         ST    R1,GPR@FWD(,R13)        save,
+         LR    R13,R1                  areas.
+         MVC   ZRWASECT,LSTNID         ID
+*
+**       Activate recovery
+*
+         MVC   DSARC,=AL4(8)           set RC
+         MVC   DSARSN,=AL4(RSN140)     set RSN
+         ZZRETRY LISTN70,RSN=DSARSN    set retry address
+*
+**       Validity check ZXRE element
+*
+         ICM   R8,15,DSAIGR1           ZXRE address init?
+         BNZ   LISTN00                 yes
+         MVC   DSARSN,=AL4(RSN112)     error RSN
+         ZZTRC SRV=A,MID=LSTNID,MOD=XPCSRV
+         B     LISTNXIT                exit
+*
+LISTN00  DS    0H
+         USING ZXRE,R8                 set addressability
+         CLC   XREID,=CL4'ZXRE'        valid?
+         BE    LISTN05                 yes
+         MVC   DSARSN,=AL4(RSN120)     error RSN
+         ZZTRC SRV=B
+         B     LISTNXIT                exit
+*
+LISTN05  DS    0H
+         TM    ZXVTFLG3,ZXVT@SUP       SUP=YES?
+         BNZ   LISTN10                 yes
+         TM    XREOPTS3,XRE@XRM        EXEC=TCB?
+         BNZ   LISTN10                 yes
+         MVC   DSARSN,=AL4(RSN144)     error RSN
+         ZZTRC SRV=C
+         B     LISTNXIT                exit
+*
+LISTN10  DS    0H
+         TM    ZXVTFLG3,ZXVT@SUP       SUP=YES?
+         BNZ   LISTN15                 yes
+         TM    XREOPTS1,XRE@ZKY        KEY=8?
+         BZ    LISTN15                 yes
+         MVC   DSARSN,=AL4(RSN148)     error RSN
+         ZZTRC SRV=D
+         B     LISTNXIT                exit
+*
+LISTN15  DS    0H
+         TM    ZXVTFLG3,ZXVT@SUP       SUP=YES?
+         BNZ   LISTN20                 yes
+         TM    XREOPTS1,XRE@ZMD        MODE=SUP?
+         BZ    LISTN20                 no
+         MVC   DSARSN,=AL4(RSN152)     error RSN
+         ZZTRC SRV=E
+         B     LISTNXIT                exit
+         DROP  R8
+*
+**       Obtain ZXRE cell element
+*
+LISTN20  DS    0H
+         SPKA  0(0)                    supervisor key
+         MVC   DSARSN,=AL4(RSN124)     set RSN
+         CPOOL GET,UNCOND,             unconditional request           +
+               CPID=ZXVTCPID,          cell pool ID                    +
+               REGS=SAVE,              protect my regs                 +
+               LINKAGE=SYSTEM
+         ST    R1,DSAZXRE              save cell address
+         ZZTRC SRV=F,SWKEY=NO
+*
+**       Relocate ZXRE element
+*
+         L     R4,DSAIGR1              source address
+         LA    R5,XRE@SIZE             source length
+         L     R2,DSAZXRE              target address
+         LA    R3,XRE@SIZE             target length
+         MVCL  R2,R4                   copy ZXRE
+         L     R8,DSAZXRE              ZXRE cell address
+         USING ZXRE,R8                 set addressability
+         ZZTRC SRV=G,SWKEY=NO
+*
+**       Identify service requestor
+*
+         USING PSA,0                   FLC addressability
+         L     R3,PSAAOLD              ASCB
+         USING ASCB,R3                 set addressability
+         MVC   XREASID,ASCBASID        save requestor ASID
+         MVC   XREASCB,PSAAOLD         save requestor ASCB
+         MVC   XRETCB,PSATOLD          save requestor TCB
+         L     R3,ASCBASSB             ASSB
+         USING ASSB,R3                 set addressability
+         MVC   XRESTOKN,ASSBSTKN       save requestor STOKEN
+         STCK  XREESTCK                store clock
+         ZZTRC SRV=H,SWKEY=NO
+         DROP  R3
+
+         MVC   DSAPLST(ZTCBTTKL),ZTCBTTKN
+         TCBTOKEN TYPE=CURRENT,        translate TCB to TTOKEN         +
+               TTOKEN=XRETTOKN,        return TTOKEN here              +
+               MF=(E,DSAPLST)
+         ST    R15,DSARC               save RC
+         LTR   R15,R15                 successful?
+         BZ    LISTN30                 yes
+         MVC   DSARSN,=AL4(RSN128)     no
+         ZZTRC SRV=I,SWKEY=NO
+         B     LISTN70                 clean up
+*
+**       Locate ZXRE listener queue
+*
+LISTN30  DS    0H
+         LA    R4,ZXVTSOMC             SOM count address
+         LA    R5,ZXVTSOMQ             SOM queue address
+         TM    XRETYPE,XRE@ZSOM        SOM system event type?
+         BNZ   LISTN40                 yes
+         ZZTRC SRV=J,SWKEY=NO
+*
+         LA    R4,ZXVTEOMC             EOM count address
+         LA    R5,ZXVTEOMQ             EOM queue address
+         TM    XRETYPE,XRE@ZEOM        EOM system event type?
+         BNZ   LISTN40                 yes
+         ZZTRC SRV=J,SWKEY=NO
+*
+         LA    R4,ZXVTCMDC             CMD count address
+         LA    R5,ZXVTCMDQ             CMD queue address
+         TM    XRETYPE,XRE@ZCMD        CMD system event type?
+         BNZ   LISTN40                 yes
+         ZZTRC SRV=K,SWKEY=NO
+*
+         LA    R4,ZXVTWTOC             WTO count address
+         LA    R5,ZXVTWTOQ             WTO queue address
+         TM    XRETYPE,XRE@ZWTO        WTO system event type?
+         BNZ   LISTN40                 yes
+         ZZTRC SRV=L,SWKEY=NO
+*
+         LA    R4,ZXVTENFC             ENF count address
+         LA    R5,ZXVTENFQ             ENF queue address
+         TM    XRETYPE,XRE@ZENF        ENF system event type?
+         BNZ   LISTN40                 yes
+         ZZTRC SRV=M,SWKEY=NO          trace
+*
+         LA    R4,ZXVTDB2C             Db2 count address
+         LA    R5,ZXVTDB2Q             Db2 queue address
+         TM    XRETYPE,XRE@ZDB2        Db2 system event type?
+         BNZ   LISTN40                 yes
+         ZZTRC SRV=N,SWKEY=NO          trace
+*
+         LA    R4,ZXVTXCFC             XCF count address
+         LA    R5,ZXVTXCFQ             XCF queue address
+         TM    XRETYPE,XRE@ZXCF        XCF system event type?
+         BNZ   LISTN40                 yes
+         ZZTRC SRV=O,SWKEY=NO          trace
+*
+**       Invalid listen service request
+*
+         MVC   DSARSN,=AL4(RSN136)     set RSN
+         ZZTRC SRV=P,SWKEY=NO
+         B     LISTN70                 clean up
+*
+**       Serialize ZXRE listener queue
+*
+LISTN40  DS    0H
+         LA    R2,ZXVTMAJR             QNAME
+         LA    R3,ZXVTMINR             RNAME
+         MVC   DSAPLST(ZENQEXCL),ZENQEXC
+         ENQ   ((R2),(R3)),MF=(E,DSAPLST)
+         OI    DSAFLG1,DSA@ENQ         DEQ required
+         ZZTRC SRV=Q,SWKEY=NO          trace
+*
+**       Update ZXRE entry token
+*
+LISTN50  DS    0H
+         L     R2,ZXVTOKEN             token value
+         LA    R3,1(,R2)               add one
+         CS    R2,R3,ZXVTOKEN          update token
+         BNE   LISTN50                 changed: try again
+         ST    R3,DSAOGR1              return token to caller
+         ST    R3,XRETOKEN             set delete token
+         ST    R11,XREZXVT             set ZXVT address
+         ZZTRC SRV=R,SWKEY=NO          trace
+*
+**       Queue ZXRE cell element
+*
+         OIL   XREFLAG1,XRE@OFFQ,REF=XREFLAGS off queue
+         L     R3,0(,R5)               queue address ptr
+         ST    R3,XRECHPTR             chain ZXRE element
+         ST    R8,0(,R5)               update queue address ptr
+         L     R3,0(,R4)               get queue count
+         LA    R3,1(,R3)               add one
+         ST    R3,0(,R4)               update count
+         OI    DSAFLG1,DSA@XRE         ZXRE queued
+         ZZTRC SRV=S,SWKEY=NO          trace
+*
+**       Call signal service subroutine
+*
+         TM    XRETYPE,XRE@ZENF        ENF system event type?
+         BZ    LISTN70                 no, clean up
+         ZZCALL SR=SIGNAL              issue ENFREQ call
+         CLC   DSARC,=AL4(RC0)         successful?
+         BNE   LISTN60                 no
+         OI    DSAFLG1,DSA@ENF         ENFREQ successful
+         ZZTRC SRV=T,SWKEY=NO          trace
+         B     LISTN70                 clean up
+*
+LISTN60  DS    0H
+         XC    DSAOGR1,DSAOGR1         zero token
+         OIL   XREFLAG2,XRE@DELL,REF=XREFLAGS
+         ZZTRC SRV=U,SWKEY=NO          trace
+*
+**       Release ZXRE queue serialization
+*
+LISTN70  DS    0H
+         TM    DSAFLG1,DSA@ENQ         DEQ required?
+         BZ    LISTN80                 no
+         LA    R2,ZXVTMAJR             QNAME
+         LA    R3,ZXVTMINR             RNAME
+         MVC   DSAPLST(ZDEQEXCL),ZDEQEXC
+         DEQ   ((R2),(R3)),MF=(E,DSAPLST)
+         NI    DSAFLG1,XFF-DSA@ENQ
+         ZZTRC SRV=V,SWKEY=NO          trace
+*
+**       ZXRE element successfully queued
+*
+LISTN80  DS    0H
+         TM    DSAFLG1,DSA@XRE         ZXRE queued?
+         BZ    LISTN99                 no, delete cell
+         TM    XRETYPE,XRE@ZENF        ENF system event type?
+         BZ    LISTN90                 no
+         TM    DSAFLG1,DSA@ENF         ENFREQ successful?
+         BZ    LISTNXIT                no, exit
+         ZZTRC SRV=W,SWKEY=NO          trace
+*
+LISTN90  DS    0H
+         NIL   XREFLAG1,XFF-XRE@OFFQ,REF=XREFLAGS on queue
+         XC    DSARC,DSARC             set RC
+         CLC   DSARSN,=AL4(RSN164)     ENFREQ returned RC=4?
+         BE    LISTN95                 yes, donot change RSN
+         XC    DSARSN,DSARSN           set RSN
+         ZZTRC SRV=X,SWKEY=NO          trace
+*
+LISTN95  DS    0H
+         ZZTRC SRV=Y,SWKEY=NO          trace
+         B     LISTNXIT                exit
+*
+LISTN99  DS    0H
+         ICM   R3,15,DSAZXRE           cell free required?
+         BZ    LISTNXIT                no, exit
+         XC    DSAZXRE,DSAZXRE         zero cell address
+         SPKA  0(0)                    supervisor key
+         CPOOL FREE,                   free cell                       +
+               CPID=ZXVTCPID,          cell pool ID                    +
+               CELL=(3),               cell                            +
+               REGS=SAVE               protect my regs
+         ZZTRC SRV=Z,SWKEY=NO          trace
+*---------------------------------------------------------------------*
+*        Exit                                                         *
+*--------+---------+---------+---------+---------+---------+---------+*
+LISTNXIT DS    0H
+         L     R2,DSAPKEY              PC caller key
+         SPKA  0(R2)                   switch key
+         L     R13,GPR@BWD(,R13)       mainline savearea
+         LM    R14,R12,GPR@R14(R13)    restore regs
+         BR    R14                     return
+*---------------------------------------------------------------------*
+*        ENQ/DEQ listform                                             *
+*--------+---------+---------+---------+---------+---------+---------+*
+         DS    0F
+ZTCBTTKN TCBTOKEN MF=L
+ZTCBTTKL EQU   *-ZTCBTTKN
+         DS    0F
+ZENQEXC  ENQ   (0,0,E,8,SYSTEM),RET=HAVE,MF=L
+ZENQEXCL EQU   *-ZENQEXC
+         DS    0F
+ZDEQEXC  DEQ   (0,0,8,SYSTEM),RET=HAVE,MF=L
+ZDEQEXCL EQU   *-ZDEQEXC
+*---------------------------------------------------------------------*
+*        Literals                                                     *
+*--------+---------+---------+---------+---------+---------+---------+*
+         LTORG ,
+         DROP  ,
+*/********************************************************************/
+*/*                                                                  */
+*/* Name:        SIGNAL                                              */
+*/*                                                                  */
+*/* Function:    ENFREQ ACTION=LISTEN subroutine                     */
+*/*                                                                  */
+*/* Description: ENF listen for specified signal event code.         */
+*/*                                                                  */
+*/* Input Regs:  R8  ZXRE address                                    */
+*/*              R9  ZRWA address                                    */
+*/*              R11 ZXVT address                                    */
+*/*              R12 DSA address                                     */
+*/*              R13 Savearea address                                */
+*/*              R14 Return address                                  */
+*/*              R15 Entry address                                   */
+*/*                                                                  */
+*/* Regs Usage:  R8  ZXRE address                                    */
+*/*              R9  ZRWA address                                    */
+*/*              R11 ZXVT address                                    */
+*/*              R10 Base address                                    */
+*/*              R12 DSA  address                                    */
+*/*              R13 Savearea address                                */
+*/*                                                                  */
+*/* Output Regs: R1  Output parameter                                */
+*/*              R15 Return code                                     */
+*/*                                                                  */
+*/********************************************************************/
+*/-------+---------+---------+---------+---------+---------+---------*/
+SIGNAL   DS    0H
+         USING ZXRE,R8
+         USING ZRWA,R9
+         USING ZXVT,R11
+         USING DSA,R12
+         B     12(,R15)
+*
+SIGNLID  DC    CL8'SIGNAL'             PC routine
+         STM   R14,R12,GPR@R14(R13)    save caller's regs
+         LR    R10,R15                 set base address
+         USING SIGNAL,R10              base addressability
+         LA    R1,DSAENFS              subroutine savearea
+         ST    R13,GPR@BWD(,R1)        chain,
+         ST    R1,GPR@FWD(,R13)        save,
+         LR    R13,R1                  areas.
+         MVC   ZRWASECT,SIGNLID        ID
+         MVC   DSARC,=AL4(RC8)         RS
+         ZZTRC ENF=A,SWKEY=NO,MID=SIGNLID,MOD=XPCSRV
+*
+**       Define ENF listener routine
+*
+         L     R2,XPCENF               ENF listener
+         BSM   R2,0                    insert AMODE
+         L     R3,XRETOKEN             ZLISTEN delete token
+         L     R4,XRESIGNL             requested event code
+         MVC   DSAPLST(SENFREQL),SENFREQ
+         TM    XREOPTS1,XRE@ZPN        PERSIST=NO?
+         BNZ   SIGNL10                 yes
+         TM    XREOPTS1,XRE@ZPM        PERSIST=EOM?
+         BZ    SIGNL10                 yes
+*
+         ZZTRC ENF=B,SWKEY=NO          trace
+         ENFREQ ACTION=LISTEN,                                         +
+               EXIT=(2),               listener EP                     +
+               PARM=(3),               listener parameter              +
+               CODE=(4),               event code                      +
+               MASEXIT=YES,            any address space               +
+               DISABLE=YES,            if listener routine fails       +
+               XSYS=NO,                only on this system image       +
+               DTOKEN=XRETKENF,        delete token                    +
+               ESTBNME=SIGNAME,        component name                  +
+               EXITNME=SIGNLID,        subroutine name                 +
+               EOT=NO,                 EOT deletes listener            +
+               EOM=YES,                EOM does not delete listener    +
+               PLISTVER=MAX,MF=(E,DSAPLST)
+         B     SIGNL20                 carry on
+*
+SIGNL10  DS    0H
+         ZZTRC ENF=C,SWKEY=NO          trace
+         ENFREQ ACTION=LISTEN,                                         +
+               EXIT=(2),               listener EP                     +
+               PARM=(3),               listener parameter              +
+               CODE=(4),               event code                      +
+               MASEXIT=YES,            any address space               +
+               DISABLE=YES,            if listener routine fails       +
+               XSYS=NO,                only on this system image       +
+               DTOKEN=XRETKENF,        delete token                    +
+               ESTBNME=SIGNAME,        component name                  +
+               EXITNME=SIGNLID,        subroutine name                 +
+               EOT=YES,                EOT deletes listener            +
+               EOM=YES,                EOM deletes listener            +
+               PLISTVER=MAX,MF=(E,DSAPLST)
+*
+SIGNL20  DS    0H
+         ST    R15,DSARC               save RC
+         LTR   R15,R15                 successful?
+         BNZ   SIGNL30                 no, test further
+         OI    XREFLAG1,XRE@ENFD       ENFREQ delete required
+         OI    XREFLAG1,XRE@OWNR       ENFREQ event request owner
+         XC    DSARSN,DSARSN           set RSN
+         ZZTRC ENF=D,SWKEY=NO          trace
+         B     SIGNLXIT                exit
+*
+SIGNL30  DS    0H
+         CLC   DSARC,=AL4(RC4)         duplicate request?
+         BNE   SIGNL40                 no, error
+         OI    XREFLAG1,XRE@CHLD       child ZXRE
+         XC    DSARC,DSARC             set RC
+         MVC   DSARSN,=AL4(RSN164)     ENFREQ retured RC=4
+         ZZTRC ENF=E,SWKEY=NO          trace
+         B     SIGNLXIT                exit
+*
+SIGNL40  DS    0H
+         MVC   DSARSN,=AL4(RSN156)     RSN
+         ZZTRC ENF=F,SWKEY=NO          trace
+*---------------------------------------------------------------------*
+*        Exit                                                         *
+*--------+---------+---------+---------+---------+---------+---------+*
+SIGNLXIT DS    0H
+         L     R13,GPR@BWD(,R13)       LISTEN routine savearea
+         LM    R14,R12,GPR@R14(R13)    restore regs
+         BR    R14                     return
+*---------------------------------------------------------------------*
+*        Literals                                                     *
+*--------+---------+---------+---------+---------+---------+---------+*
+         DS    0F
+XPCENF   DC    V(XPCENF)               XPCENF listener
+         DS    0F
+SENFREQ  ENFREQ ACTION=LISTEN,EXIT=*-*,PARM=*-*,CODE=*-*,MF=L
+SENFREQL EQU   *-SENFREQ
+         DS    0C
+SIGNAME  DC    CL8'ZXPCSRV'            component name
+         LTORG ,
+         DROP  ,
+*/********************************************************************/
+*/*                                                                  */
+*/* Name:        DELZXRE                                             */
+*/*                                                                  */
+*/* Function:    Delete (disable) listener ZXRE entry                */
+*/*                                                                  */
+*/* Environment: TCB mode                                            */
+*/*              Enabled for I/O and External interrupts.            */
+*/*                                                                  */
+*/* Macro Call:  ZLISTEN DELETE=token                                */
+*/*                                                                  */
+*/* Security:    When SAF=NOCALL is specified, security checks are   */
+*/*              bypassed. When SAF=XPCCLASS is specified, the PC    */
+*/*              caller must have READ authority to ZXPC.API.AUTH    */
+*/*              profile in resource class XPCCLASS.                 */
+*/*                                                                  */
+*/* Input Regs:  DSAIGR1 - Token value                               */
+*/*              DSAPCID - PCID router code                          */
+*/*              R9  ZRWA local address                              */
+*/*              R11 ZXVT address                                    */
+*/*              R12 DSA address                                     */
+*/*              R13 Router savearea address                         */
+*/*              R14 Return address                                  */
+*/*              R15 Entry address                                   */
+*/*                                                                  */
+*/* Regs Usage:  R5  ZXRE address                                    */
+*/*              R6  ZXSA address                                    */
+*/*              R9  ZRWA address                                    */
+*/*              R11 ZXVT address                                    */
+*/*              R10 Base address                                    */
+*/*              R12 DSA  address                                    */
+*/*              R13 Savearea address                                */
+*/*                                                                  */
+*/* Output Regs: R1  Output parameter                                */
+*/*              R15 Return code                                     */
+*/*               00 - Listener routine delete successful            */
+*/*               08 - Listener routine delete failed                */
+*/*                                                                  */
+*/*              R0  Reason codes                                    */
+*/*               00000000 - Listener routine undefined              */
+*/*               00000300 - Delete request abnormally terminated    */
+*/*               00000304 - Invalid delete token suppplied          */
+*/*               00000308 - listere ZXRE element not found          */
+*/*                                                                  */
+*/*                                                                  */
+*/********************************************************************/
+*/-------+---------+---------+---------+---------+---------+---------*/
+DELZXRE  DS    0H
+         USING ZRWA,R9
+         USING ZXVT,R11
+         USING DSA,R12
+         B     12(,R15)
+*
+DELZID   DC    CL8'DELZXRE'            PC routine
+         STM   R14,R12,GPR@R14(R13)    save caller's regs
+         LR    R10,R15                 set base address
+         USING DELZXRE,R10             base addressability
+         LA    R1,DSAPCSA              PC routine savearea
+         ST    R13,GPR@BWD(,R1)        chain,
+         ST    R1,GPR@FWD(,R13)        save,
+         LR    R13,R1                  areas.
+         MVC   ZRWASECT,DELZID         ID
+         LA    R6,DSAZXSA              ZXSA address
+         USING ZXSA,R6                 set addressability
+         XC    ZXSA(XSA@SIZE),ZXSA
+         MVC   XSAID,=CL4'ZXSA'
+*
+**       Activate recovery
+*
+         SPKA  0(0)
+         MVC   DSARC,=AL4(RC8)         set RC
+         MVC   DSARSN,=AL4(RSN300)     set RSN
+         ZZRETRY DELZEXIT,RSN=DSARSN   set retry address
+         ZZTRC SRV=A,MID=DELZID,MOD=XPCSRV
+*
+**       Validity check delete token
+*
+         ICM   R3,15,DSAIGR1           token init?
+         BNZ   DELZ000                 yes
+         MVC   DSARSN,=AL4(RSN304)     invalid delete token
+         ZZTRC SRV=B,SWKEY=NO          trace
+         B     DELZEXIT                exit
+*
+**       Scan SOM ZXRE queue entries
+*
+DELZ000  DS    0H
+         XR    R5,R5
+         L     R3,ZXVTSOMQ             queue address
+         CS    R5,R3,ZXVTSOMQ          listeners queued?
+         BZ    DELZ010                 no
+         ST    R5,XSAZXRE              entry address
+         MVC   XSAPARM,DSAIGR1         ZLISTEN token
+         ZZCALL ZXSA,EP=DISZXRE        delete ZXRE entry
+         ST    R15,DSARC               save RC
+         ST    R0,DSARSN               save RSN
+         LTR   R15,R15                 delete successful?
+         BZ    DELZEXIT                yes, exit
+         ZZTRC SRV=C,SWKEY=NO          trace
+*
+**       Scan EOM ZXRE queue entries
+*
+DELZ010  DS    0H
+         XR    R5,R5
+         L     R3,ZXVTEOMQ             queue addres
+         CS    R5,R3,ZXVTEOMQ          listeners queued?
+         BZ    DELZ020                 no
+         ST    R5,XSAZXRE              entry address
+         MVC   XSAPARM,DSAIGR1         ZLISTEN token
+         ZZCALL ZXSA,EP=DISZXRE        delete ZXRE entry
+         ST    R15,DSARC               save RC
+         ST    R0,DSARSN               save RSN
+         LTR   R15,R15                 delete successful?
+         BZ    DELZEXIT                yes, exit
+         ZZTRC SRV=D,SWKEY=NO          trace
+*
+**       Scan CMD ZXRE queue entries
+*
+DELZ020  DS    0H
+         XR    R5,R5
+         L     R3,ZXVTCMDQ             queue address
+         CS    R5,R3,ZXVTCMDQ          listeners queued?
+         BZ    DELZ030                 no
+         ST    R5,XSAZXRE              entry address
+         MVC   XSAPARM,DSAIGR1         ZLISTEN token
+         ZZCALL ZXSA,EP=DISZXRE        delete ZXRE entry
+         ST    R15,DSARC               save RC
+         ST    R0,DSARSN               save RSN
+         LTR   R15,R15                 delete successful?
+         BZ    DELZEXIT                yes, exit
+         ZZTRC SRV=E,SWKEY=NO          trace
+*
+**       Scan WTO ZXRE queue entries
+*
+DELZ030  DS    0H
+         XR    R5,R5
+         L     R3,ZXVTWTOQ             queue address
+         CS    R5,R3,ZXVTWTOQ          listeners queued?
+         BZ    DELZ040                 no
+         ST    R5,XSAZXRE              entry address
+         MVC   XSAPARM,DSAIGR1         ZLISTEN token
+         ZZCALL ZXSA,EP=DISZXRE        delete ZXRE entry
+         ST    R15,DSARC               save RC
+         ST    R0,DSARSN               save RSN
+         LTR   R15,R15                 delete successful?
+         BZ    DELZEXIT                yes, exit
+         ZZTRC SRV=F,SWKEY=NO          trace
+*
+**       Scan Db2 ZXRE queue entries
+*
+DELZ040  DS    0H
+         XR    R5,R5
+         L     R3,ZXVTDB2Q             queue addres
+         CS    R5,R3,ZXVTDB2Q          listeners queued?
+         BZ    DELZ050                 no
+         ST    R5,XSAZXRE              queue address
+         MVC   XSAPARM,DSAIGR1         ZLISTEN token
+         ZZCALL ZXSA,EP=DISZXRE        delete ZXRE entry
+         ST    R15,DSARC               save RC
+         ST    R0,DSARSN               save RSN
+         LTR   R15,R15                 delete successful?
+         BZ    DELZEXIT                yes, exit
+         ZZTRC SRV=G,SWKEY=NO          trace
+*
+**       Scan XCF ZXRE queue entries
+*
+DELZ050  DS    0H
+         XR    R5,R5
+         L     R3,ZXVTXCFQ             queue address
+         CS    R5,R3,ZXVTXCFQ          listeners queued?
+         BZ    DELZ060                 no
+         ST    R5,XSAZXRE              queue address
+         MVC   XSAPARM,DSAIGR1         ZLISTEN token
+         ZZCALL ZXSA,EP=DISZXRE        delete ZXRE entry
+         ST    R15,DSARC               save RC
+         ST    R0,DSARSN               save RSN
+         LTR   R15,R15                 delete successful?
+         BZ    DELZEXIT                yes, exit
+         ZZTRC SRV=H,SWKEY=NO          trace
+*
+**       Scan ENF ZXRE queue entries
+*
+DELZ060  DS    0H
+         XR    R5,R5
+         L     R3,ZXVTENFQ             queue address
+         CS    R5,R3,ZXVTENFQ          listeners queued?
+         BZ    DELZEXIT                no, exit
+         USING ZXRE,R5                 set addressability
+         ZZTRC SRV=I,SWKEY=NO          trace
+         B     DELZ080                 scan queue
+*
+DELZ070  DS    0H
+         ICM   R5,15,XRECHPTR          last entry?
+         BZ    DELZEXIT                yes, exit
+         ZZTRC SRV=J,SWKEY=NO          trace
+*
+DELZ080  DS    0H
+         CLC   XREID,=CL4'ZXRE'        valid entry?
+         BNE   DELZEXIT                no, exit
+         CLC   XRETOKEN,DSAIGR1        delete token match?
+         BNE   DELZ070                 no, loop
+         TM    XREFLAG1,XRE@OWNR       ENF signal owner
+         BZ    DELZ099                 no, delete ZXRE
+         TM    XREFLAG1,XRE@ENFD       ENF delete required?
+         BZ    DELZ099                 no, delete ZXRE
+         XC    ZXSA(XSA@SIZE),ZXSA
+         MVC   XSAID,=CL4'ZXSA'
+         ST    R5,XSAZXRE              init ZXRE owner
+         MVC   XSAPARM,XRESIGNL        yes, init signal code
+         ZZCALL ZXSA,EP=ENFCHLD        locate child ZXRE
+         ST    R15,DSARC               save RC
+         LTR   R15,R15                 any children?
+         BNZ   DELZ099                 yes, skip ENF delete
+         L     R2,XRESIGNL             signal code
+         L     R3,XRETKENF             delete token
+         MVC   DSAPLST(ZENFREQL),ZENFREQ
+         ENFREQ ACTION=DELETE,CODE=(2),DTOKEN=(3),                     +
+               MF=(E,DSAPLST)
+         NIL   XREFLAG1,XFF-XRE@ENFD,REF=XREFLAGS
+         ZZTRC SRV=K,SWKEY=NO          trace
+*
+**       Delete listener routine ZXRE
+*
+DELZ099  DS    0H
+         OIL   XREFLAG1,XRE@OFFQ,REF=XREFLAGS
+         OIL   XREFLAG2,XRE@DELS,REF=XREFLAGS
+         XC    DSARC,DSARC             set RC
+         XC    DSARSN,DSARSN           set RSN
+         ZZTRC SRV=L,SWKEY=NO          trace
+*---------------------------------------------------------------------*
+*        Exit                                                         *
+*--------+---------+---------+---------+---------+---------+---------+*
+DELZEXIT DS    0H
+         L     R2,DSAPKEY              PC caller key
+         SPKA  0(R2)                   switch key
+         L     R13,GPR@BWD(,R13)       mainline savearea
+         LM    R14,R12,GPR@R14(R13)    restore regs
+         BR    R14                     return
+*---------------------------------------------------------------------*
+*        Literals                                                     *
+*--------+---------+---------+---------+---------+---------+---------+*
+         DS    0F
+ZENFREQ  ENFREQ ACTION=DELETE,CODE=*-*,MF=L
+ZENFREQL EQU   *-ZENFREQ
+         LTORG ,
+         DROP  ,
+*/********************************************************************/
+*/*                                                                  */
+*/* Name:        GETMEM                                              */
+*/*                                                                  */
+*/* Function:    Obtain storage outside primary address space PC     */
+*/*                                                                  */
+*/* Description: Add the address space represented by the target     */
+*/*              STOKEN to the DU-AL as a public entry and obtain    */
+*/*              private storage in the target address space.        */
+*/*                                                                  */
+*/* Environment: TCB or SRB mode.                                    */
+*/*              Enabled for I/O and External interrupts.            */
+*/*              The caller must not be locked.                      */
+*/*                                                                  */
+*/* Macro Call:  ZGETMEM                                             */
+*/*                                                                  */
+*/* Security:    When SAF=NOCALL is specified, security checks are   */
+*/*              bypassed. When SAF=XPCCLASS is specified, the PC    */
+*/*              caller must have READ authority to ZXPC.API.AUTH    */
+*/*              profile in resource class XPCCLASS.                 */
+*/*                                                                  */
+*/* Input Regs:  DSAIGR0  - Storage subpool                          */
+*/*              DSAIGR1  - Storage length                           */
+*/*              DSAIAR1  - {STOKEN|JOB|STC|TSU}                     */
+*/*              DSAIAR15 - Request indicator                        */
+*/*              DSAPCID  - PCID router code                         */
+*/*              R9  ZRWA address                                    */
+*/*              R11 ZXVT address                                    */
+*/*              R12 DSA address                                     */
+*/*              R13 Router savearea address                         */
+*/*              R14 Return address                                  */
+*/*              R15 Entry address                                   */
+*/*                                                                  */
+*/* Regs Usage:  R6  ZXSA address                                    */
+*/*              R9  ZRWA address                                    */
+*/*              R10 Base address                                    */
+*/*              R11 ZXVT address                                    */
+*/*              R12 DSA  address                                    */
+*/*              R13 Savearea address                                */
+*/*                                                                  */
+*/* Output Regs: R0  - R14 restored                                  */
+*/*              R15 - Return code                                   */
+*/*                                                                  */
+*/********************************************************************/
+*/-------+---------+---------+---------+---------+---------+---------*/
+GETMEM   DS    0H
+         USING ZRWA,R9
+         USING ZXVT,R11
+         USING DSA,R12
+         B     12(,R15)
+*
+GETMID   DC    CL8'GETMEM'             PC routine
+         STM   R14,R12,GPR@R14(R13)    save caller's regs
+         LR    R10,R15                 set base address
+         USING GETMEM,R10              base addressability
+         LA    R1,DSAPCSA              PC routine savearea
+         ST    R13,GPR@BWD(,R1)        chain,
+         ST    R1,GPR@FWD(,R13)        save,
+         LR    R13,R1                  areas.
+         MVC   ZRWASECT,GETMID         ID
+         LAM   AR0,AR15,ZXVTAR0F       zero ARs
+*
+**       Validity check request
+*
+         LA    R6,DSAZXSA              ZXSA address
+         USING ZXSA,R6                 set addressability
+         XC    ZXSA(XSA@SIZE),ZXSA     clear ZXSA
+         MVC   XSAID,=CL4'ZXSA'        ID
+         MVC   XSAJOBID,DSAIAR15+3     copy request ID
+         CLI   XSAJOBID,&TOKID         STOKEN supplied?
+         BE    GETM000                 yes
+         L     R2,DSAIAR1              {JOB|STC|TSU} name address
+         MVC   XSAJOBNM,0(R2)          copy address space name
+         OI    XSAFLG1,XSA@NOGN        skip generic check
+         ZZCALL ZXSA,EP=LOCJOB,RC=DSARC,RSN=DSARSN
+         CLC   DSARC,=AL4(RC0)         successful?
+         BE    GETM010                 yes
+*
+**       Trace Validity check error
+*
+         ZZTRC SRV=A,MID=GETMID,MOD=XPCSRV
+         B     GETM099                 exit
+*
+GETM000  DS    0H
+         L     R2,DSAIAR1              STOKEN address
+         MVC   XSASTOKN,0(R2)          copy STOKEN
+         ZZTRC SRV=B                   trace
+*
+**       Set authorized AX
+*
+GETM010  DS    0H
+         SPKA  0(0)                    supervisor key
+         AXEXT ,                       extract AX
+         ST    R0,DSAENAX              save it
+         LA    R0,1                    request AX=1
+         AXSET AX=(0)                  set it
+         ZZTRC SRV=C                   trace
+*
+**       Add entry to access list
+*
+         MVC   DSAPLST(GETMALEL),GETMALET
+         ALESERV ADD,                  DU-AL                           +
+               STOKEN=XSASTOKN,        STOKEN                          +
+               AL=WORKUNIT,            work unit                       +
+               ACCESS=PUBLIC,          public access                   +
+               CHKEAX=NO,              no EAX check                    +
+               ALET=DSAALET,           return ALET here                +
+               MF=(E,DSAPLST)
+         L     R2,DSAPKEY              PC caller key
+         SPKA  0(R2)                   switch key
+         LTR   R15,R15                 successful?
+         BZ    GETM020                 yes
+*
+**       Trace ALESERV add error
+*
+         ST    R15,DSARC               RC
+         MVC   DSARSN,=AL4(RSN84)      set RSN
+         ZZTRC SRV=D                   trace
+         B     GETM099                 exit
+*
+**       Obtain storage in target address space
+*
+GETM020  DS    0H
+         L     R2,DSAPKEY              PC caller key
+         SPKA  0(R2)                   switch key
+         L     R2,DSAIGR0              subpool parm
+         L     R3,DSAIGR1              length parm
+         STORAGE OBTAIN,                                               +
+               COND=YES,               conditional                     +
+               LOC=ANY,                anywhere                        +
+               SP=(2),                 subpool                         +
+               LENGTH=(3),             length                          +
+               ALET=DSAALET            ALET
+         LTR   R15,R15                 successful?
+         BZ    GETM030                 yes
+*
+**       Trace STORAGE obtain error
+*
+         ST    R15,DSARC               error RC
+         MVC   DSARSN,=AL4(RSN88)      error RSN
+         ZZTRC SRV=E                   trace
+         B     GETM040                 exit
+*
+**       Set return parameters
+*
+GETM030  DS    0H
+         ST    R15,DSARC               return RC
+         ST    R1,DSAOGR1              return address
+         XC    DSARSN,DSARSN           set RSN
+         ZZTRC SRV=F                   trace
+*
+**       Remove entry from access list
+*
+GETM040  DS    0H
+         MVC   DSAPLST(GETMALEL),GETMALET
+         SPKA  0(0)                    supervisor key
+         ALESERV DELETE,                                               +
+               ALET=DSAALET,           ALET                            +
+               MF=(E,DSAPLST)
+         L     R2,DSAPKEY              PC caller key
+         SPKA  0(R2)                   switch key
+         LTR   R15,R15                 successful?
+         BZ    GETM099                 yes
+*
+**       Trace ALESERV delete error
+*
+         ST    R15,DSARSN              return RC in RSN
+         ZZTRC SRV=G                   trace
+*
+**       Return to router
+*
+GETM099  DS    0H
+         L     R13,GPR@BWD(,R13)       mainline savearea
+         LM    R14,R12,GPR@R14(R13)    restore regs
+         BR    R14                     return
+*---------------------------------------------------------------------*
+*        Constants/Literals                                           *
+*--------+---------+---------+---------+---------+---------+---------+*
+         DS    0F
+GETMALET ALESERV MF=L
+GETMALEL EQU   *-GETMALET
+         LTORG ,
+         DROP  ,
+*/********************************************************************/
+*/*                                                                  */
+*/* Name:        FREMEM                                              */
+*/*                                                                  */
+*/* Function:    Release storage outside primary address space PC    */
+*/*                                                                  */
+*/* Description: Release private storage in the target address       */
+*/*              space and remove the DU-AL public entry from the    */
+*/*              access list.                                        */
+*/*                                                                  */
+*/* Environment: TCB or SRB mode.                                    */
+*/*              Enabled for I/O and External interrupts.            */
+*/*              The caller must not be locked.                      */
+*/*                                                                  */
+*/* Macro Call:  ZFREMEM                                             */
+*/*                                                                  */
+*/* Security:    When SAF=NOCALL is specified, security checks are   */
+*/*              bypassed. When SAF=XPCCLASS is specified, the PC    */
+*/*              caller must have READ authority to ZXPC.API.AUTH    */
+*/*              profile in resource class XPCCLASS.                 */
+*/*                                                                  */
+*/* Input Regs:  DSAIGR0  - Storage subpool                          */
+*/*              DSAIGR1  - Storage length                           */
+*/*              DSAIAR0  - Storage address                          */
+*/*              DSAIAR1  - {STOKEN|JOB|STC|TSU}                     */
+*/*              DSAIAR15 - Request indicator                        */
+*/*              DSAPCID  - PCID router code                         */
+*/*              R9  ZRWA address                                    */
+*/*              R11 ZXVT address                                    */
+*/*              R12 DSA address                                     */
+*/*              R13 Router savearea address                         */
+*/*              R14 Return address                                  */
+*/*              R15 Entry address                                   */
+*/*                                                                  */
+*/* Regs Usage:  R6  ZXSA address                                    */
+*/*              R9  ZRWA address                                    */
+*/*              R10 Base address                                    */
+*/*              R11 ZXVT address                                    */
+*/*              R12 DSA  address                                    */
+*/*              R13 Savearea address                                */
+*/*                                                                  */
+*/* Output Regs: R0  - R14 restored                                  */
+*/*              R15 - Return code                                   */
+*/*                                                                  */
+*/********************************************************************/
+*/-------+---------+---------+---------+---------+---------+---------*/
+FREMEM   DS    0H
+         USING ZRWA,R9
+         USING ZXVT,R11
+         USING DSA,R12
+         B     12(,R15)
+*
+FREMID   DC    CL8'FREMEM'             PC routine
+         STM   R14,R12,GPR@R14(R13)    save caller's regs
+         LR    R10,R15                 set base address
+         USING FREMEM,R10              base addressability
+         LA    R1,DSAPCSA              PC routine savearea
+         ST    R13,GPR@BWD(,R1)        chain,
+         ST    R1,GPR@FWD(,R13)        save,
+         LR    R13,R1                  areas.
+         MVC   ZRWASECT,FREMID         ID
+         LAM   AR0,AR15,ZXVTAR0F       zero ARs
+*
+**       Validity check request
+*
+         LA    R6,DSAZXSA              ZXSA address
+         USING ZXSA,R6                 set addressability
+         XC    ZXSA(XSA@SIZE),ZXSA     clear ZXSA
+         MVC   XSAID,=CL4'ZXSA'        ID
+         MVC   XSAJOBID,DSAIAR15+3     copy request ID
+         CLI   XSAJOBID,&TOKID         STOKEN supplied?
+         BE    FREM000                 yes
+         L     R2,DSAIAR1              {JOB|STC|TSU} name address
+         MVC   XSAJOBNM,0(R2)          copy address space name
+         OI    XSAFLG1,XSA@NOGN        skip generic check
+         ZZCALL ZXSA,EP=LOCJOB,RC=DSARC,RSN=DSARSN
+         CLC   DSARC,=AL4(RC0)         successful?
+         BE    FREM010                 yes
+*
+**       Trace Validity check error
+*
+         ZZTRC SRV=A,MID=FREMID,MOD=XPCSRV
+         B     FREM099                 exit
+*
+FREM000  DS    0H
+         L     R2,DSAIAR1              STOKEN address
+         MVC   XSASTOKN,0(R2)          copy STOKEN
+         ZZTRC SRV=B                   trace
+*
+**       Set authorized AX
+*
+FREM010  DS    0H
+         SPKA  0(0)                    supervisor key
+         AXEXT ,                       extract AX
+         ST    R0,DSAENAX              save it
+         LA    R0,1                    request AX=1
+         AXSET AX=(0)                  set it
+         ZZTRC SRV=C                   trace
+*
+**       Add entry to access list
+*
+         MVC   DSAPLST(FREMALEL),FREMALET
+         ALESERV ADD,                  DU-AL                           +
+               STOKEN=XSASTOKN,        STOKEN                          +
+               AL=WORKUNIT,            work unit                       +
+               ACCESS=PUBLIC,          public access                   +
+               CHKEAX=NO,              no EAX check                    +
+               ALET=DSAALET,           return ALET here                =
+               MF=(E,DSAPLST)
+         L     R2,DSAPKEY              PC caller key
+         SPKA  0(R2)                   switch key
+         LTR   R15,R15                 successful?
+         BZ    FREM020                 yes
+*
+**       Trace ALESERV add error
+*
+         ST    R15,DSARC               RC
+         MVC   DSARSN,=AL4(RSN92)      set RSN
+         ZZTRC SRV=D                   trace
+         B     FREM099                 exit
+*
+**       Release storage in target address space
+*
+FREM020  DS    0H
+         L     R2,DSAPKEY              PC caller key
+         SPKA  0(R2)                   switch key
+         L     R2,DSAIGR0              subpool parm
+         L     R3,DSAIGR1              length parm
+         L     R4,DSAIAR0              storage address
+         STORAGE RELEASE,                                              +
+               SP=(2),                 subpool                         +
+               LENGTH=(3),             length                          +
+               ADDR=(4),               address                         +
+               ALET=DSAALET            ALET
+         LTR   R15,R15                 successful?
+         BZ    FREM030                 yes
+*
+**       Trace STORAGE release error
+*
+         ST    R15,DSARC               error RC
+         MVC   DSARSN,=AL4(RSN96)      error RSN
+         ZZTRC SRV=E                   trace
+         B     FREM040                 exit
+*
+**       Set return parameters
+*
+FREM030  DS    0H
+         ST    R15,DSARC               return RC
+         XC    DSARSN,DSARSN           set RSN
+         XC    DSAOPAR,DSAOPAR         zero output parm
+         ZZTRC SRV=F                   trace
+*
+**       Remove entry from access list
+*
+FREM040  DS    0H
+         MVC   DSAPLST(FREMALEL),FREMALET
+         SPKA  0(0)                    supervisor key
+         ALESERV DELETE,                                               +
+               ALET=DSAALET,           ALET                            +
+               MF=(E,DSAPLST)
+         L     R2,DSAPKEY              PC caller key
+         SPKA  0(R2)                   switch key
+         LTR   R15,R15                 successful?
+         BZ    FREM099                 yes
+*
+**       Trace ALESERV delete error
+*
+         ST    R15,DSARSN              return RC in RSN
+         ZZTRC SRV=G                   trace
+*
+**       Return to router
+*
+FREM099  DS    0H
+         L     R13,GPR@BWD(,R13)       mainline savearea
+         LM    R14,R12,GPR@R14(R13)    restore regs
+         BR    R14                     return
+*---------------------------------------------------------------------*
+*        Constants/Literals                                           *
+*--------+---------+---------+---------+---------+---------+---------+*
+         DS    0F
+FREMALET ALESERV MF=L
+FREMALEL EQU   *-FREMALET
+         LTORG ,
+         DROP  ,
+*/********************************************************************/
+*/*                                                                  */
+*/* Name:        COPY                                                */
+*/*                                                                  */
+*/* Function:    Copy data to target address space PC                */
+*/*                                                                  */
+*/* Description: Set access register mode and copy data to target    */
+*/*              address space using supplied access list entry      */
+*/*              token.                                              */
+*/*                                                                  */
+*/* Environment: TCB or SRB mode.                                    */
+*/*              Enabled for I/O and External interrupts.            */
+*/*              LOCAL lock may be held but is not required.         */
+*/*                                                                  */
+*/* Macro Call:  ZCOPY                                               */
+*/*                                                                  */
+*/* Security:    When SAF=NOCALL is specified, security checks are   */
+*/*              bypassed. When SAF=XPCCLASS is specified, the PC    */
+*/*              caller must have READ authority to ZXPC.API.AUTH    */
+*/*              profile in resource class XPCCLASS.                 */
+*/*                                                                  */
+*/* Input Regs:  DSAIGR0  - Target data length                       */
+*/*              DSAIGR1  - Target data address                      */
+*/*              DSAIAR0  - Source data address                      */
+*/*              DSAIAR1  - {STOKEN|JOB|STC|TSU}                     */
+*/*              DSAIAR15 - Request indicator                        */
+*/*              DSAPCID  - PCID router code                         */
+*/*              R9  ZRWA address                                    */
+*/*              R11 ZXVT address                                    */
+*/*              R12 DSA address                                     */
+*/*              R13 Router savearea address                         */
+*/*              R14 Return address                                  */
+*/*              R15 Entry address                                   */
+*/*                                                                  */
+*/* Regs Usage:  R6  ZXSA address                                    */
+*/*              R9  ZRWA address                                    */
+*/*              R10 Base address                                    */
+*/*              R11 ZXVT address                                    */
+*/*              R12 DSA  address                                    */
+*/*              R13 Savearea address                                */
+*/*                                                                  */
+*/* Output Regs: R0  - R14 restored                                  */
+*/*              R15 - Return code                                   */
+*/*                                                                  */
+*/********************************************************************/
+*/-------+---------+---------+---------+---------+---------+---------*/
+COPY     DS    0H
+         USING ZRWA,R9
+         USING ZXVT,R11
+         USING DSA,R12
+         B     12(,R15)
+*
+COPYID   DC    CL8'COPY'               PC routine
+         STM   R14,R12,GPR@R14(R13)    save caller's regs
+         LR    R10,R15                 set base address
+         USING COPY,R10                base addressability
+         LA    R1,DSAPCSA              PC routine savearea
+         ST    R13,GPR@BWD(,R1)        chain,
+         ST    R1,GPR@FWD(,R13)        save,
+         LR    R13,R1                  areas.
+         MVC   ZRWASECT,COPYID         ID
+         LAM   AR0,AR15,ZXVTAR0F       zero ARs
+*
+**       Validity check request
+*
+         LA    R6,DSAZXSA              ZXSA address
+         USING ZXSA,R6                 set addressability
+         XC    ZXSA(XSA@SIZE),ZXSA     clear ZXSA
+         MVC   XSAID,=CL4'ZXSA'        ID
+         MVC   XSAJOBID,DSAIAR15+3     copy request ID
+         CLI   XSAJOBID,&TOKID         STOKEN supplied?
+         BE    COPY000                 yes
+         L     R2,DSAIAR1              {JOB|STC|TSU} name address
+         MVC   XSAJOBNM,0(R2)          copy address space name
+         OI    XSAFLG1,XSA@NOGN        skip generic check
+         ZZCALL ZXSA,EP=LOCJOB,RC=DSARC,RSN=DSARSN
+         CLC   DSARC,=AL4(RC0)         successful?
+         BE    COPY010                 yes
+*
+**       Trace Validity check error
+*
+         ZZTRC SRV=A,MID=COPYID,MOD=XPCSRV
+         B     COPY099                 exit
+*
+COPY000  DS    0H
+         L     R2,DSAIAR1              STOKEN address
+         MVC   XSASTOKN,0(R2)          copy STOKEN
+         ZZTRC SRV=B                   trace
+*
+**       Set authorized AX
+*
+COPY010  DS    0H
+         AXEXT ,                       extract AX
+         ST    R0,DSAENAX              save it
+         LA    R0,1                    request AX=1
+         AXSET AX=(0)                  set it
+         ZZTRC SRV=C                   trace
+*
+**       Add entry to access list
+*
+         MVC   DSAPLST(COPYALEL),COPYALET
+         SPKA  0(0)                    supervisor key
+         ALESERV ADD,                  DU-AL                           +
+               STOKEN=XSASTOKN,        STOKEN                          +
+               AL=WORKUNIT,            work unit                       +
+               CHKEAX=NO,              no EAX check                    +
+               ACCESS=PUBLIC,          public access                   +
+               ALET=DSAALET,           return ALET here                +
+               MF=(E,DSAPLST)
+         L     R2,DSAPKEY              PC caller key
+         SPKA  0(R2)                   switch key
+         LTR   R15,R15                 successful?
+         BZ    COPY020                 yes
+*
+**       Trace ALESERV add error
+*
+         ST    R15,DSARC               RC
+         MVC   DSARSN,=AL4(RSN100)     set RSN
+         ZZTRC SRV=D                   trace
+         B     COPY099                 exit
+*
+**       Copy data to target address space
+*
+COPY020  DS    0H
+         L     R4,DSAALET              storage ALET
+         SAR   R0,R4                   ALET in AR0
+         L     R0,DSAIGR1              target data address
+         L     R1,DSAIGR0              target data length
+         L     R2,DSAIAR0              source data address
+         LR    R3,R1                   target data length
+         SAC   512                     AR mode
+         MVCL  R0,R2                   copy data to target space
+         SAC   0                       primary mode
+*
+**       Set return parameters
+*
+         XC    DSARC,DSARC             RC
+         XC    DSARSN,DSARSN           RSN
+         XC    DSAOGR1,DSAOGR1         output parameter
+         ZZTRC SRV=E                   trace
+*
+**       Remove entry from access list
+*
+         MVC   DSAPLST(COPYALEL),COPYALET
+         SPKA  0(0)                    supervisor key
+         ALESERV DELETE,                                               +
+               ALET=DSAALET,           ALET                            +
+               MF=(E,DSAPLST)
+         L     R2,DSAPKEY              PC caller key
+         SPKA  0(R2)                   switch key
+         LTR   R15,R15                 successful?
+         BZ    COPY099                 yes
+*
+**       Trace ALESERV delete error
+*
+         ST    R15,DSARSN              save RC in RSN
+         ZZTRC SRV=F                   trace
+*
+**       Return to router
+*
+COPY099  DS    0H
+         L     R13,GPR@BWD(,R13)       mainline savearea
+         LM    R14,R12,GPR@R14(R13)    restore regs
+         BR    R14                     return
+*---------------------------------------------------------------------*
+*        Constants/Literals                                           *
+*--------+---------+---------+---------+---------+---------+---------+*
+         DS    0F
+COPYALET ALESERV MF=L
+COPYALEL EQU   *-COPYALET
+         LTORG ,
+         DROP  ,
+*/********************************************************************/
+*/*                                                                  */
+*/* Name:        MODEL                                               */
+*/*                                                                  */
+*/* Function:    Sample PC routine model code                        */
+*/*                                                                  */
+*/* Description: Describe your API PC-routine function.              */
+*/*                                                                  */
+*/* Environment: Describe the required caller environment.           */
+*/*                                                                  */
+*/* Macro Call:  ZMODEL                                              */
+*/*                                                                  */
+*/* Security:    Describe the required caller security to access     */
+*/*              your API PC-routine.                                */
+*/*                                                                  */
+*/* Input Regs:  DSAIGR0  - Input parameter                          */
+*/*              DSAIGR1  - Input parameter                          */
+*/*              DSAIAR0  - Input parameter                          */
+*/*              DSAIAR1  - Input parameter                          */
+*/*              DSAIAR15 - Input parameter                          */
+*/*              DSAPCID  - PCID router code                         */
+*/*              R9  ZRWA address                                    */
+*/*              R11 ZXVT address                                    */
+*/*              R12 DSA address                                     */
+*/*              R13 Router savearea address                         */
+*/*              R14 Return address                                  */
+*/*              R15 Entry address                                   */
+*/*                                                                  */
+*/* Regs Usage:  R9  ZRWA address                                    */
+*/*              R10 Base address                                    */
+*/*              R11 ZXVT address                                    */
+*/*              R12 DSA address                                     */
+*/*              R13 Savearea address                                */
+*/*                                                                  */
+*/* Output Regs: R0  - R14 restored                                  */
+*/*              R15 - Return code                                   */
+*/*                                                                  */
+*/********************************************************************/
+*/-------+---------+---------+---------+---------+---------+---------*/
+MODEL    DS    0H
+         USING ZRWA,R9
+         USING ZXVT,R11
+         USING DSA,R12
+         B     12(,R15)
+*
+MODELID  DC    CL8'MODEL'              PC routine
+         STM   R14,R12,GPR@R14(R13)    save caller's regs
+         LR    R10,R15                 set base address
+         USING MODEL,R10               base addressability
+         LA    R1,DSAPCSA              PC routine savearea
+         ST    R13,GPR@BWD(,R1)        chain,
+         ST    R1,GPR@FWD(,R13)        save,
+         LR    R13,R1                  areas.
+         MVC   ZRWASECT,MODELID        ID
+         LAM   AR0,AR15,ZXVTAR0F       zero ARs
+*
+**       Code your PC-routine here
+*
+
+*
+**       Set return parameters
+*
+         XC    DSARC,DSARC             RC
+         XC    DSARSN,DSARSN           RSN
+         XC    DSAOGR1,DSAOGR1         output parameter
+*---------------------------------------------------------------------*
+*        Exit linkage                                                 *
+*--------+---------+---------+---------+---------+---------+---------+*
+MODELXIT DS    0H
+         L     R13,GPR@BWD(,R13)       mainline savearea
+         LM    R14,R12,GPR@R14(R13)    restore regs
+         BR    R14                     return
+*---------------------------------------------------------------------*
+*        ABEND Exit                                                   *
+*--------+---------+---------+---------+---------+---------+---------+*
+MDLABEND DS    0H
+         L     R15,=A(ABENDPC)         ABEND subroutine
+         BSM   R15,0                   set AMODE
+         BR    R15                     ABEND
+*---------------------------------------------------------------------*
+*        Constants/Literals                                           *
+*--------+---------+---------+---------+---------+---------+---------+*
+         LTORG ,
+         DROP  ,
+*/********************************************************************/
+*/*                                                                  */
+*/* Name:        SAFCALL authorization subroutine                    */
+*/*                                                                  */
+*/* Function:    Validity check resource authority                   */
+*/*                                                                  */
+*/* Input Regs:  R9  ZRWA address                                    */
+*/*              R11 ZXVT address                                    */
+*/*              R12 DSA address                                     */
+*/*              R13 Savearea address                                */
+*/*              R14 Return address                                  */
+*/*              R15 Entry address                                   */
+*/*                                                                  */
+*/* Regs Usage:  R9  ZRWA address                                    */
+*/*              R10 Base address                                    */
+*/*              R11 ZXVT address                                    */
+*/*              R12 DSA address                                     */
+*/*              R13 Savearea address                                */
+*/*                                                                  */
+*/* Output Regs: R15 Return code                                     */
+*/*              R0  Reason code returned to PC caller               */
+*/*                                                                  */
+*/********************************************************************/
+*/-------+---------+---------+---------+---------+---------+---------*/
+SAFCALL  DS    0H
+         USING ZRWA,R9
+         USING ZXVT,R11
+         USING DSA,R12
+         B     12(,R15)
+SAFCID   DC    CL8'SAFCALL'            ID
+         STM   R14,R12,GPR@R14(R13)    save caller's regs
+         LR    R10,R15                 set base address
+         USING SAFCALL,R10             base addressability
+         LA    R1,DSASBSA              subroutine save area
+         ST    R13,GPR@BWD(,R1)        chain,
+         ST    R1,GPR@FWD(,R13)        save,
+         LR    R13,R1                  areas.
+         MVC   ZRWASECT,SAFCID         ID
+         LAM   AR0,AR15,ZXVTAR0F       zero ARs
+         IPK   ,                       caller key
+         ST    R2,DSACKEY              save key
+*
+         MVC   DSATRCO,DSATRC          caller trace function
+         MVC   DSATRSO,DSATRSF         caller trace subfunction
+         MVC   DSATRC,SAFCID           set trace function
+         MVC   DSATRSF,=CL8'RACROUTE'  set trace subfunction
+         ZZTRC SRV=$,MID=SAFCID,MOD=XPCSRV
+*
+         MVC   DSAUACC,=AL4(2)         UACC=READ
+         MVC   DSACZSZE,ZXVTCSZE       CLASS name size
+         MVC   DSACZAPI,ZXVTCLAS       init class name
+         MVI   DSAENTTY,BLANK
+         MVC   DSAENTTY+1(DSA@ENTL-1),DSAENTTY
+         MVC   DSAENTEL(SSAFNAMZ),SSAF init profile length+name
+         LA    R1,DSA@ENTZ             profile buffer length
+         STH   R1,DSAENTBL             init buffer length
+         ZZTRC SRV=#                   trace
+*
+SAFC000  DS    0H
+         L     R2,DSAUACC              UACC attribute
+         MVC   DSAROUTE(RACI@SZE),RACILST
+         SPKA  0(0)                    Supervisor key
+         L     R1,ZXVTSAFC             get call count
+         LA    R1,1(,R1)               add one
+         ST    R1,ZXVTSAFC             update count
+         RACROUTE REQUEST=AUTH,                                        +
+               ENTITYX=DSAENTBF,       profile buffer                  +
+               CLASS=DSACLASS,         resource class                  +
+               ATTR=(2),               UACC attribute                  +
+               LOG=ASIS,               whatever                        +
+               RELEASE=1.9,            server release                  +
+               WORKA=DSARWORK,         SAF work area                   +
+               MF=(E,DSAROUTE)
+         ST    R15,DSAXRC              SAF RC
+         ST    R15,DSAOGR1             return SAF RC in R1
+         LA    R3,DSAROUTE             RACROUTE listform
+         USING SAFP,R3                 set addressability
+         MVC   DSARC,SAFPRRET          RACF RC
+         MVC   DSARSN,SAFPRREA         RACF RSN
+         ZZTRC SRV=@                   trace
+*
+SAFCEXIT DS    0H
+         L     R2,DSACKEY              Caller key
+         SPKA  0(R2)                   switch key
+         MVC   DSATRC,DSATRCO          reset trace function
+         MVC   DSATRSF,DSATRSO         reset trace subfunction
+         L     R13,GPR@BWD(,R13)       caller savearea
+         LM    R14,R12,GPR@R14(R13)    restore regs
+         BR    R14                     return
+*---------------------------------------------------------------------*
+*        Constants/Literals                                           *
+*--------+---------+---------+---------+---------+---------+---------+*
+SSAF     DS    0F
+SSAFLEN  DC    AL2(SSAFNAML)           profile name length
+SSAFNAME DC    C'ZXPC.API.AUTH'        profile name
+SSAFNAML EQU   *-SSAFNAME
+SSAFNAMZ EQU   *-SSAF
+         DS    0F
+RACILST  RACROUTE REQUEST=AUTH,CLASS=0,ENTITYX=0,RELEASE=1.9,MF=L
+RACI@SZE EQU   *-RACILST
+         LTORG ,
+         DROP  ,
+*/********************************************************************/
+*/*                                                                  */
+*/* Name:        ABENDPC                                             */
+*/*                                                                  */
+*/* Function:    ABEND subroutine                                    */
+*/*                                                                  */
+*/* Input Regs:  R9  ZRWA address                                    */
+*/*              R11 ZXVT address                                    */
+*/*              R12 DSA address                                     */
+*/*              R13 Savearea address                                */
+*/*              R14 Return address                                  */
+*/*              R15 Entry address                                   */
+*/*                                                                  */
+*/* Regs Usage:  R9  ZRWA address                                    */
+*/*              R10 Base address                                    */
+*/*              R11 ZXVT address                                    */
+*/*              R12 DSA address                                     */
+*/*              R13 Savearea address                                */
+*/*                                                                  */
+*/* Output Regs: None                                                */
+*/*                                                                  */
+*/********************************************************************/
+*/-------+---------+---------+---------+---------+---------+---------*/
+ABENDPC  DS    0H
+         USING ZRWA,R9
+         USING ZXVT,R11
+         USING DSA,R12
+         B     12(,R15)
+*
+ABENDID  DC    CL8'ABENDPC'            ID
+         STM   R14,R12,GPR@R14(R13)    save caller's regs
+         LR    R10,R15                 set base address
+         USING ABENDPC,R10             base addressability
+         LA    R1,DSABNSA              subroutine save area
+         ST    R13,GPR@BWD(,R1)        chain,
+         ST    R1,GPR@FWD(,R13)        save,
+         LR    R13,R1                  areas.
+         MVC   ZRWASECT,ABENDID        ID
+*
+ABENDXIT DS    0H
+         L     R2,DSARC                show RC in R2
+         L     R3,DSAXRC               show XRC in R3
+         L     R4,DSARSN               show RSN
+         L     R5,DSAPCID              show PCID in R4
+         ABEND 2022,DUMP,REASON=(R2)   ABEND
+*---------------------------------------------------------------------*
+*        Constants/literals                                           *
+*--------+---------+---------+---------+---------+---------+---------+*
+         LTORG ,
+         DROP  ,
+*/********************************************************************/
+*/*                                                                  */
+*/* Name:        RMTEXIT                                             */
+*/*                                                                  */
+*/* Function:    Resource Termination Manager                        */
+*/*                                                                  */
+*/* Description: Receives control from PURGEDQ during address space  */
+*/*              termination to free the SRB block and associated    */
+*/*              element extension. The total length was stored by   */
+*/*              SRB scheduler in the SRBPARM field.                 */
+*/*                                                                  */
+*/* Input Regs:  R1  SRB block address                               */
+*/*              R14 PURGEDQ return address                          */
+*/*              R15 RMTR entry point address                        */
+*/*                                                                  */
+*/* Regs Usage:  R1  SRB block adress                                */
+*/*              R10 base address                                    */
+*/*              R14 return address                                  */
+*/*                                                                  */
+*/* Output Regs: R14 - return address                                */
+*/*                                                                  */
+*/* Attributes:  Reentrant                                           */
+*/*              Supervisor State                                    */
+*/*              Key Zero                                            */
+*/*              TCB Mode                                            */
+*/*                                                                  */
+*/********************************************************************/
+*/-------+---------+---------+---------+---------+---------+---------*/
+RMTEXIT  DS    0H
+         BASR  R10,0                   base
+         USING *,R10                   set addressability
+         LR    R9,R14                  protect return address
+         USING SRB,R1                  SRB addressability
+         L     R0,SRBPARM              SRB+other-blocks length
+         STORAGE RELEASE,                                              +
+               ADDR=(1),LENGTH=(0),SP=245
+         LR    R14,R9                  restore return address
+         BR    R14                     return to PURGEDQ
+*--------+---------+---------+---------+---------+---------+---------+*
+*        Dynamic Storage Area                                         *
+*--------+---------+---------+---------+---------+---------+---------+*
+DSA      DSECT ,
+DSASAVE  DS    18F                     mainline savearea
+DSAPCSA  DS    18F                     PC routine savearea
+DSASBSA  DS    18F                     PC subroutine savearea
+DSAENFS  DS    18F                     ENF subroutine savearea
+DSABNSA  DS    18F                     ABEND routine savearea
+DSAARS   DS    16F                     PC routine access regs savearea
+DSAHRS   DS    16F                     PC routine high regs savearea
+         DS    0X
+DSAFLG1  DS    XL1                     flags
+DSA@ENQ  EQU   X'80'                   ENQ indicator
+DSA@LRL  EQU   X'40'                   LOCAL lock release required
+DSA@CMS  EQU   X'20'                   CMS lock release required
+DSA@AXV  EQU   X'10'                   AX restore required
+DSA@FRR  EQU   X'08'                   FRR recovery established
+DSA@STA  EQU   X'04'                   ESTAE recovery established
+DSA@XRE  EQU   X'02'                   ZXRE successfully queued
+DSA@ENF  EQU   X'01'                   ENFREQ request indicator
+         DS    0X
+DSAFLG2  DS    XL1                     flags
+DSA@2R0  EQU   X'80'                   -available
+DSA@2R1  EQU   X'40'                   -available
+DSA@2R2  EQU   X'20'                   -available
+DSA@2R3  EQU   X'10'                   -available
+DSA@2R4  EQU   X'08'                   -available
+DSA@2R5  EQU   X'04'                   -available
+DSA@2R6  EQU   X'02'                   -available
+DSA@2R7  EQU   X'01'                   -available
+         DS    0H
+DSAFLGX  DS    XL2                     more flags
+         DS    0F
+DSAXRC   DS    F                       SAF RC
+DSACKEY  DS    F                       caller key
+DSAPKEY  DS    F                       PC caller key
+DSAALET  DS    F                       ALET
+DSAENAX  DS    F                       entry AX
+DSAUACC  DS    F                       UACC attribute
+DSAADDR  DS    F                       storage address
+DSARTRY  DS    F                       APIRTM retry address
+DSATOKN  DS    F                       ESTAE token
+DSAFRRA  DS    F                       XPCFRR EPA
+DSAZXRE  DS    F                       ZXRE cell address
+DSAZXREQ DS    F                       system event queue address
+DSAWORD  DS    F                       general workara
+DSAWRD2  DS    F                       general workarea
+ENFPTR   DS    F                       needed by ENFREQ macro
+         DS    0F
+DSAIPAR  DS    0F                      input parms
+DSAIGRE  DS    F                       -R14 = parameter
+DSAPCID  DS    F                       -R15 = PCID
+DSAIGR0  DS    F                       -R0  = parameter
+DSAIGR1  DS    F                       -R1  = parameter
+DSA@IPSZ EQU   *-DSAIPAR               keep R15, R0, R1 order
+         DS    0F
+DSAIAPAR DS    0F                      input parms
+DSAIAR14 DS    F                       -AR14 = parameter
+DSAIAR15 DS    F                       -AR15 = parameter
+DSAIAR0  DS    F                       -AR0  = parameter
+DSAIAR1  DS    F                       -AR1  = parameter
+DSA@IASZ EQU   *-DSAIAPAR              keep access regs order
+         DS    0D
+DSAIGPAR DS    0D                      grande input parms
+DSAGGGRE DS    D                       -GR14 = parameter
+DSAGPCID DS    D                       -GR15 = PCID
+DSAIGGR0 DS    D                       -GR0  = Parameter
+DSAIGGR1 DS    D                       -GR1  = parameter
+DSA@IGSZ EQU   *-DSAIGPAR              keep geeral regs order
+         DS    0F
+DSAOPAR  DS    0F                      output parameters
+DSARC    DS    F                       -R15 = RC
+DSARSN   DS    F                       -R0  = RSN
+DSAOGR1  DS    F                       -R1  = output parm
+DSA@OPSZ EQU   *-DSAOPAR               keep it in order
+         DS    0F
+DSAROUTE DS    CL(RACI@SZE)            RACROUTE listform
+         DS    0F
+DSARWORK DS    XL512                   SAF work area
+         DS    0F
+DSAENTBF DS    0CL255                  profile buffer
+DSAENTBL DS    AL2                     -buffer length
+DSAENTEL DS    AL2                     -profile length
+DSAENTTY DS    CL251                   -profile name
+DSA@ENTL EQU   *-DSAENTTY              -profile name length
+DSA@ENTZ EQU   *-DSAENTBF              profile buffer lenght
+         DS    0C
+DSACLASS DS    0CL9                    CLASS field
+DSACZSZE DS    AL1                     -size
+DSACZAPI DS    CL8                     -name
+DSA@CLSZ EQU   *-DSACLASS              CLASS field size
+         DS    0D
+DSASAFBF DS    CL120                   SAF buffer
+DSA@SAFZ EQU   *-DSASAFBF              SAF buffer length
+         DS    0D
+DSADYLPA DS    CL(LPMED_LEN)           CSVDYLPA listform
+         DS    0D
+DSADYLST CSVDYLPA MF=(L,DYLPAL)        CSVDYLPA listform
+DSARQLPA DS    0D                      CSVDYLPA
+DSARQSUB DS    CL4                     -subsystem name
+DSARQREL DS    CL6                     -subsystem release level
+DSARQMOD DS    CL6                     -subsystem load module
+DSA@RQSZ EQU   *-DSARQLPA              keep it together
+         DS    0F
+DSAEQDQ  DS    CL(CSVENQL)             ENQ/DEQ listform
+         DS    0F
+DSAESTAE DS    CL(ESTAEL)              ESTAE listform
+         DS    0F
+DSAZXSA  DS    CL(XSA@SIZE)            ZXSA listform
+         DS    0C
+DSAMAIN  DS    CL8                     mainline ID
+DSATRC   DS    CL8                     trace function
+DSATRSF  DS    CL8                     trace subfunction
+DSATRCO  DS    CL8                     caller trace function
+DSATRSO  DS    CL8                     caller trace subfunction
+DSATRPC  DS    CL8                     trace PC call
+DSAVAR   DS    CL8                     variable data
+DSAVARX  DS    CL1                     slack byte
+DSA@VARZ EQU   *-DSATRC                keep it together
+         DS    0D
+DSAPLST  DS    XL256                   general parmlist
+DSAPLSTL EQU   *-DSAPLST               length of parmlist
+         DS    0D
+DSAZRWA  DS    CL(ZRWA@SZE)            ZRWA recovery workarea
+DSAZRWAL EQU   *-DSAZRWA               ZRWA workarea size
+         DS    0D
+DSA@SIZE EQU   *-DSA                   size of DSA
+*---------------------------------------------------------------------*
+*        Server Data Areas                                            *
+*--------+---------+---------+---------+---------+---------+---------+*
+         PRINT NOGEN
+         ZZXVT ,
+         ZZXRE ,
+         ZZXSA ,
+         ZZRWA ,
+         ZZEQU ,
+         ZDYNLPA DSECT=YES
+         ZZTAB GEN=PCE,DSECT=YES
+*---------------------------------------------------------------------*
+*        System Data Areas                                            *
+*--------+---------+---------+---------+---------+---------+---------+*
+         PRINT NOGEN
+         IHAPSA ,
+         IHAASCB ,
+         IHAASSB ,
+         IHAASXB ,
+         IEZJSCB ,
+         IEFJESCT ,
+         IEFJSCVT ,
+         IEFENFCT ,
+         IEFENFPM ,
+         CVT   DSECT=YES
+         IHAECVT ,
+         IKJTCB DSECT=YES
+         IKJRB DSECT=YES
+         IHASCVT DSECT=YES,LIST=NO
+         IHASRB ,
+         IHAFRRS ,
+         IHASDWA ,
+         ICHSAFP ,
+         IHAPSW ,
+         CSVLPRET LIST=YES
+         IEEBASEA ,
+CSCB     DSECT ,
+         IEECHAIN ,
+         IEFENFSG ,      ENF signal data map
+ENSG@SZE EQU *-ENSG
+         END

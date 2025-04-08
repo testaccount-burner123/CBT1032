@@ -1,0 +1,334 @@
+.*/*******************************************************************/
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/* ---------------------  Z L I S T E N -------------------------- */
+.*/* --------------------- E X A M P L E S ------------------------- */
+.*/* --------------------------------------------------------------- */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* EXAMPLE 1:                                                      */
+.*/*                                                                 */
+.*/*  Define a listener routine that triggers when a job, started    */
+.*/*  task or TSO user begins execution. The listener routine runs   */
+.*/*  under the address space jobstep task TCB.                      */
+.*/*                                                                 */
+.*/*  ZLISTEN  SOM=*,EP=(2),PARM=(3),MF=(E,PLIST)                    */
+.*/*           LTR   R15,R15                                         */
+.*/*           BNZ   ERROR                                           */
+.*/*           ST    R1,LTOKEN   returned delete token               */
+.*/*                                                                 */
+.*/*  LTOKEN   DS  F                                                 */
+.*/*  PLIST    ZLISTEN MF=L      listform                            */
+.*/*           ZZXRE ,           include ZZXRE mapping macro         */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* EXAMPLE 2:                                                      */
+.*/*                                                                 */
+.*/*  Define a listener routine that triggers when started task,     */
+.*/*  SMFDAILY, begins execution. The listener routine runs under    */
+.*/*  the SMFDAILY jobstep task TCB.                                 */
+.*/*                                                                 */
+.*/*  ZLISTEN  SOMSTC=MYSTC,EP=(2),PARM=(3),MF=(E,PLIST)             */
+.*/*           LTR   R15,R15                                         */
+.*/*           BNZ   ERROR                                           */
+.*/*           ST    R1,LTOKEN   returned delete token               */
+.*/*                                                                 */
+.*/*  LTOKEN   DS  F                                                 */
+.*/*  MYSTC    DC  CL8'SMFDAILY' started task name                   */
+.*/*  PLIST    ZLISTEN MF=L      listform                            */
+.*/*           ZZXRE ,           include ZZXRE mapping macro         */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* EXAMPLE 3:                                                      */
+.*/*                                                                 */
+.*/*  Define a listener routine that triggers when job, REPORT1,     */
+.*/*  begins execution. The listener routine runs under the jobstep  */
+.*/*  task TCB of the MONEXC started task address space.             */
+.*/*                                                                 */
+.*/*  ZLISTEN  SOMJOB=MYJOB,XSTC=XSTC,EP=(2),PARM=(3),MF=(E,PLIST)   */
+.*/*           LTR   R15,R15                                         */
+.*/*           BNZ   ERROR                                           */
+.*/*           ST    R1,LTOKEN   returned delete token               */
+.*/*                                                                 */
+.*/*  LTOKEN   DS  F                                                 */
+.*/*  MYJOB    DC  CL8'REPORT1'  job name                            */
+.*/*  XSTC     DC  CL8'MONEXC'   job name                            */
+.*/*  PLIST    ZLISTEN MF=L      listform                            */
+.*/*           ZZXRE ,           include ZZXRE mapping macro         */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* EXAMPLE 4:                                                      */
+.*/*                                                                 */
+.*/*  Define a listener routine that triggers when ANY address space */
+.*/*  in the system normally or abnormally terminates. The listener  */
+.*/*  routine executes under the initiator (IEFSD060) jobstep task   */
+.*/*  TCB of the terminating address space.                          */
+.*/*                                                                 */
+.*/*  ZLISTEN  EOM=*,EP=(2),PARM=(3),MF=(E,PLIST)                    */
+.*/*           LTR   R15,R15                                         */
+.*/*           BNZ   ERROR                                           */
+.*/*           ST    R1,LTOKEN   returned delete token               */
+.*/*                                                                 */
+.*/*  LTOKEN   DS  F                                                 */
+.*/*  PLIST    ZLISTEN MF=L      listform                            */
+.*/*           ZZXRE ,           include ZZXRE mapping macro         */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* EXAMPLE 5:                                                      */
+.*/*                                                                 */
+.*/*  Define a listener routine that triggers when the started task  */
+.*/*  designated by MYSTC normally or abnormally terminates. The     */
+.*/*  listener routine runs in IRB-mode under the TCB designated by  */
+.*/*  TCB token TCBTKN, in address space designaded by address space */
+.*/*  token ASCBTKN.                                                 */
+.*/*                                                                 */
+.*/*  ZLISTEN  EOMSTC=MYSTC,EP=(2),PARM=(3),                         */
+.*/*           XTTOKEN=TCBTKN,XSTOKEN=ASCBTKN,MF=(E,PLIST)           */
+.*/*           MF=(E,PLIST)                                          */
+.*/*           LTR   R15,R15                                         */
+.*/*           BNZ   ERROR                                           */
+.*/*           ST    R1,LTOKEN   returned delete token               */
+.*/*                                                                 */
+.*/*  LTOKEN   DS    F                                               */
+.*/*  MYSTC    DC    CL8'ZECF'   STC where system event triggers     */
+.*/*  ASCBTKN  DS    XL8         listerer runs in this address space */
+.*/*  TCBTKN   DS    XL16        listener runs under this task       */
+.*/*  PLIST    ZLISTEN MF=L      listform                            */
+.*/*           ZZXRE ,           include ZZXRE mapping macro         */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* EXAMPLE 6:                                                      */
+.*/*                                                                 */
+.*/*  Define a listener routine that triggers when JES2 normally     */
+.*/*  or abnormallt terminates. The listener routine executes under  */
+.*/*  the initiator (IEFSD060) jobstep task TCB of the JES2 address  */
+.*/*  space.                                                         */
+.*/*                                                                 */
+.*/*  ZLISTEN  EOMSTC=JES2,EP=(2),PARM=(3),MF=(E,PLIST)              */
+.*/*           LTR   R15,R15                                         */
+.*/*           BNZ   ERROR                                           */
+.*/*           ST    R1,LTOKEN   returned delete token               */
+.*/*                                                                 */
+.*/*  LTOKEN   DS    F                                               */
+.*/*  JES2     DC    CL8'JES2'   where event triggers                */
+.*/*  PLIST    ZLISTEN MF=L      listform                            */
+.*/*           ZZXRE ,           include ZZXRE mapping macro         */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* EXAMPLE 7:                                                      */
+.*/*                                                                 */
+.*/*  Define a listener routine that triggers when job, REPORT1,     */
+.*/*  normally or abnormally terminates. the listener routine runs   */
+.*/*  under the jobstep task TCB of the MONEXC started task address  */
+.*/*  space.                                                         */
+.*/*                                                                 */
+.*/*  ZLISTEN  EOMJOB=MYJOB,XSTC=XSTC,EP=(2),PARM=(3),MF=(E,PLIST)   */
+.*/*           LTR   R15,R15                                         */
+.*/*           BNZ   ERROR                                           */
+.*/*           ST    R1,LTOKEN   returned delete token               */
+.*/*                                                                 */
+.*/*  LTOKEN   DS  F                                                 */
+.*/*  MYJOB    DC  CL8'REPORT1'  job name                            */
+.*/*  XSTC     DC  CL8'MONEXC'   job name                            */
+.*/*  PLIST    ZLISTEN MF=L      listform                            */
+.*/*           ZZXRE ,           include ZZXRE mapping macro         */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* EXAMPLE 8:                                                      */
+.*/*                                                                 */
+.*/*  Define a listener routine that triggers when the STOP TSO      */
+.*/*  command is issued. The listener routine executes synchronously */
+.*/*  in SVRB-mode, under the TCB where the system event triggers.   */
+.*/*                                                                 */
+.*/*  ZLISTEN CMD='STOP TSO',                                       +*/
+.*/*          ALIAS='P TSO',                                        +*/
+.*/*          EP=(2),PARM=(3),MF=(E,PLIST)                           */
+.*/*          LTR   R15,R15                                          */
+.*/*          BNZ   ERROR                                            */
+.*/*          ST    R1,LTOKEN   returned delete token                */
+.*/*                                                                 */
+.*/*  LTOKEN  DS    F                                                */
+.*/*  PLIST   ZLISTEN MF=L                                           */
+.*/*          ZZXRE ,           include ZZXRE mapping macro          */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* EXAMPLE 9:                                                      */
+.*/*                                                                 */
+.*/*  Define a listener routine that triggers when the STOP LLA      */
+.*/*  command is issued. The listener routine executes asynchronously*/
+.*/*  in IRB-mode, under the TCB specified by the XTTOKEN parameter, */
+.*/*  in the address space designated by the XSTOKEN parameter.      */
+.*/*                                                                 */
+.*/*  ZLISTEN CMD='STOP LLA',                                       +*/
+.*/*          ALIAS='P LLA',                                        +*/
+.*/*          XSTOKEN=ASCBTKN,                                      +*/
+.*/*          XTTOKEN=TCBTKN,                                       +*/
+.*/*          EP=(2),PARM=(3),MF=(E,PLIST)                           */
+.*/*          LTR   R15,R15                                          */
+.*/*          BNZ   ERROR                                            */
+.*/*          ST    R1,LTOKEN   returned delete token                */
+.*/*                                                                 */
+.*/*  LTOKEN  DS  F                                                  */
+.*/*  ASCBTKN DC  XL8           listener runs in this address space  */
+.*/*  TCBTKN  DC  XL16          listener runs under this task        */
+.*/*  PLIST   ZLISTEN MF=L                                           */
+.*/*          ZZXRE ,           include ZZXRE mapping macro          */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* EXAMPLE 10:                                                     */
+.*/*                                                                 */
+.*/*  Define a listener routine that triggeres when the STOP MYSTC   */
+.*/*  command is issued. The listener routine is triggered only when */
+.*/*  the command is issued by generic TSO user-ID TSU*X*7, and      */
+.*/*  executes in SVRB-mode, under the TCB that issued the command.  */
+.*/*                                                                 */
+.*/*  ZLISTEN CMD='STOP MYSTC',                                     +*/
+.*/*          ALIAS='P MYSTC',                                      +*/
+.*/*          TSU=TSUID,                                            +*/
+.*/*          EP=(2),PARM=(3),MF=(E,PLIST)                           */
+.*/*          LTR   R15,R15                                          */
+.*/*          BNZ   ERROR                                            */
+.*/*          ST    R1,LTOKEN   returned delete token                */
+.*/*                                                                 */
+.*/*  LTOKEN  DS    F                                                */
+.*/*  TSUID   DC    CL8'TSU*X*7'                                     */
+.*/*  PLIST   ZLISTEN MF=L                                           */
+.*/*          ZZXRE ,           include ZZXRE mapping macro          */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* EXAMPLE 11:                                                     */
+.*/*                                                                 */
+.*/*  Define a listener routine that triggers when message IEA405E   */
+.*/*  is issued. The listener routine executes asynchronously in     */
+.*/*  IRB-mode, under the jobstep task TCB of the address space      */
+.*/*  specified by the XSTOKEN parameter.                            */
+.*/*                                                                 */
+.*/*  ZLISTEN WTO='$HASP395',                                       +*/
+.*/*          XSTOKEN=ASCBTKN,                                      +*/
+.*/*          EP=(2),PARM=(3),MF=(E,PLIST)                           */
+.*/*          LTR   R15,R15                                          */
+.*/*          BNZ   ERROR                                            */
+.*/*          ST    R1,LTOKEN   returned delete token                */
+.*/*                                                                 */
+.*/*  LTOKEN  DS    F                                                */
+.*/*  ASCBTKN DC    XL8         Listener runs in this address space  */
+.*/*  PLIST   ZLISTEN MF=L                                           */
+.*/*          ZZXRE ,           include ZZXRE mapping macro          */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* EXAMPLE 12:                                                     */
+.*/*                                                                 */
+.*/*  Define a listener routine that triggers when message $HASP395  */
+.*/*  is issued on behalf of jobname MYJOB. The listener routine     */
+.*/*  executes in SVRB-mode under the TCB that issued the $HASP395   */
+.*/*  message.                                                       */
+.*/*                                                                 */
+.*/*  ZLISTEN WTO='$HASP395',JOB=MYJOB,                             +*/
+.*/*          EP=(2),PARM=(3),MF=(E,PLIST)                           */
+.*/*          LTR   R15,R15                                          */
+.*/*          BNZ   ERROR                                            */
+.*/*          ST    R1,LTOKEN   returned delete token                */
+.*/*                                                                 */
+.*/*  LTOKEN  DS    F                                                */
+.*/*  MYJOB   DC    CL8'MYJOB'  jobname where $HASP395 is issued     */
+.*/*  PLIST   ZLISTEN MF=L                                           */
+.*/*          ZZXRE ,           include ZZXRE mapping macro          */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* EXAMPLE 13:                                                     */
+.*/*                                                                 */
+.*/*  Define a listener routine that triggers when event code 55     */
+.*/*  is signaled by MVS/ENF for one of the following shortages:     */
+.*/*                                                                 */
+.*/*  - Pageable Storage Shortage                                    */
+.*/*  - Auxiliary Storage Shortage                                   */
+.*/*  - Available Frame Queue Shortage                               */
+.*/*  - Preferred Frame Queue Shortage                               */
+.*/*                                                                 */
+.*/*  Your listener routine executes in the address space where the  */
+.*/*  ENF event triggered. The listener routine persists for the     */
+.*/*  life of the ZLISTEN service request caller address space.      */
+.*/*                                                                 */
+.*/*  ZLISTEN ENF=55,EP=(2),PARM=(3),PERSIST=EOM,MF=(E,PLIST)        */
+.*/*          MF=(E,PLIST)                                           */
+.*/*          LTR   R15,R15                                          */
+.*/*          BNZ   ERROR                                            */
+.*/*          ST    R1,LTOKEN   returned delete token                */
+.*/*                                                                 */
+.*/*  LTOKEN  DS    F                                                */
+.*/*  PLIST   ZLISTEN MF=L                                           */
+.*/*          ZZXRE ,           include ZZXRE mapping macro          */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* EXAMPLE 14:                                                     */
+.*/*                                                                 */
+.*/*  Define a listener routine that triggers when event code 37     */
+.*/*  is signaled by MVS/ENF for one of the following SMF events:    */
+.*/*                                                                 */
+.*/*  - SMF has completed initialization                             */
+.*/*  - SMF has terminated                                           */
+.*/*                                                                 */
+.*/*  Your listener routine executes in the started task address     */
+.*/*  space specified by the XSTC= parameter. The listener routine   */
+.*/*  persists for the life of the ZLISTEN service request caller    */
+.*/*  task TCB.                                                      */
+.*/*                                                                 */
+.*/*  ZLISTEN ENF=37,EP=(2),PARM=(3),XSTC=(3),PERSIST=EOT,          +*/
+.*/*          MF=(E,PLIST)                                           */
+.*/*          LTR   R15,R15                                          */
+.*/*          BNZ   ERROR                                            */
+.*/*          ST    R1,LTOKEN   returned delete token                */
+.*/*                                                                 */
+.*/*  LTOKEN  DS    F                                                */
+.*/*  PLIST   ZLISTEN MF=L                                           */
+.*/*          ZZXRE ,           include ZZXRE mapping macro          */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* EXAMPLE 15:                                                     */
+.*/*                                                                 */
+.*/*  Define a listener routine that triggers when any XCF message   */
+.*/*  is issued. The listener routine executes in SVRB-mode under    */
+.*/*  the XCF TCB that issued the message.                           */
+.*/*                                                                 */
+.*/*  ZLISTEN XCF=*,EP=(2),PARM=(3),MF=(E,PLIST)                     */
+.*/*          LTR   R15,R15                                          */
+.*/*          BNZ   ERROR                                            */
+.*/*          ST    R1,LTOKEN   returned delete token                */
+.*/*                                                                 */
+.*/*  LTOKEN  DS    F                                                */
+.*/*  PLIST   ZLISTEN MF=L                                           */
+.*/*          ZZXRE ,           include ZZXRE mapping macro          */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* EXAMPLE 16:                                                     */
+.*/*                                                                 */
+.*/*  Define a listener routine that triggers when any Db2 message   */
+.*/*  is issued. The listener routine executes in SVRB-mode under    */
+.*/*  the Db2 TCB that issued the message.                           */
+.*/*                                                                 */
+.*/*  ZLISTEN DB2=*,EP=(2),PARM=(3),MF=(E,PLIST)                     */
+.*/*          LTR   R15,R15                                          */
+.*/*          BNZ   ERROR                                            */
+.*/*          ST    R1,LTOKEN   returned delete token                */
+.*/*                                                                 */
+.*/*  LTOKEN  DS    F                                                */
+.*/*  PLIST   ZLISTEN MF=L                                           */
+.*/*          ZZXRE ,           include ZZXRE mapping macro          */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/*******************************************************************/

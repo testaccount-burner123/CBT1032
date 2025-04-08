@@ -1,0 +1,1520 @@
+XPCWTO   CSECT
+*/********************************************************************/
+*/*                                                                  */
+*/* Name:        XPCWTO                                              */
+*/*                                                                  */
+*/* Function:    ZXPC Server WTO message listener                    */
+*/*                                                                  */
+*/* Description: Receives control from SVC-35 when a WTO message     */
+*/*              is issued by a task in any address space.           */
+*/*                                                                  */
+*/* Input Regs:  R0  SSCT address                                    */
+*/*              R1  SSOB address                                    */
+*/*              R13 savearea address                                */
+*/*              R14 return address                                  */
+*/*              R15 entry point address                             */
+*/*                                                                  */
+*/* Regs Usage:  R5  WTO  address                                    */
+*/*              R6  WQE  address                                    */
+*/*              R7  SSCT address                                    */
+*/*              R8  SSOB address                                    */
+*/*              R9  ZRWA address                                    */
+*/*              R10 base address                                    */
+*/*              R11 ZXVT address                                    */
+*/*              R12 DSA  address                                    */
+*/*              R13 savearea address                                */
+*/*                                                                  */
+*/* Output Regs: R13 savearea address                                */
+*/*              R14 return address                                  */
+*/*                                                                  */
+*/* Attributes:  TCB-mode                                            */
+*/*              Primary mode                                        */
+*/*              Key 0                                               */
+*/*              Supervisor state                                    */
+*/*              Page-fixed                                          */
+*/*              Write-protected                                     */
+*/*              Dynamic-LPA resident                                */
+*/*                                                                  */
+*/* Copyright:   Ben Marino. 2021 - 2022 (unpublished)               */
+*/*                                                                  */
+*/********************************************************************/
+*---------------------------CHANGE LOG--------------------------------*
+*                                                                     *
+* ID    Rel    Date       Author        Comments                      *
+*---------------------------------------------------------------------*
+* @01 | V1R1 | 12072021 | Ben Marino  | Initial version               *
+*     |      |          |             |                               *
+***********************************************************************
+*--------+---------+---------+---------+---------+---------+---------+*
+XPCWTO   AMODE 31
+XPCWTO   RMODE ANY
+         COPY  ZZGBL
+         USING XPCWTO,R15              Entry
+         STM   R14,R12,GPR@R14(R13)    save caller's regs
+         B     WTOMAIN                 branch
+         ZZMAC GEN=MID,DSECT=NO        module ID
+*
+WTOMAIN  DS    0H
+         DROP  R15
+         LR    R10,R15                 base
+         USING XPCWTO,R10              addressability
+         LR    R7,R0                   SSCT
+         USING SSCT,R7                 set addressability
+         LR    R8,R1                   SSOB
+         USING SSOB,R8                 set addressability
+         L     R6,SSOBINDV             SSWT
+         USING SSOBEXT,R6              set addressability
+         L     R6,SSWTWQE              WQE
+         USING WQE,R6                  set addressability
+         LA    R1,SSWTRTOK             continue,
+         ST    R1,SSOBRETN             normal processing.
+         XR    R11,R11                 ZXVT not available
+*
+**       Obtain dynamic storage area
+*
+         SPKA  X'80'(0)                problem key
+         STORAGE OBTAIN,LOC=ANY,CALLRKY=YES,                           +
+               LENGTH=DSA@SIZE,SP=130,LINKAGE=SYSTEM
+         SPKA  0(0)                    supervisor key
+         LR    R12,R1
+         USING DSA,R12                 set addressability
+         LA    R3,DSA@SIZE             DSA size
+         LR    R2,R1                   copy address
+         XR    R15,R15                 zero
+         MVCL  R2,R14                  scrub DSA
+         ST    R13,GPR@BWD(,R1)        chain
+         ST    R1,GPR@FWD(,R13)         save,
+         LR    R13,R1                    areas.
+         ST    R8,DSASSOB              save SSOB address
+*
+**       Establish listener recovery
+*
+         LA    R9,DSAZRWA              ZRWA address
+         USING ZRWA,R9                 set addressability
+         MVC   ZRWAID,=CL4'ZRWA'       ID
+         MVC   ZRWALMOD,MIDNAME        listener module
+         MVC   ZRWASECT,MIDNAME        listener control section
+         L     R3,XPCRTM               recovery routine
+         BSM   R3,0                    set AMODE
+         MVC   DSAESTAE(ESTAEL),ESTAE  listform
+         ESTAE (3),                                                    +
+               PARAM=(9),              DRWA address                    +
+               TOKEN=DSATOKN,          store token here                +
+               MF=(E,DSAESTAE)
+         LTR   R15,R15                 successful?
+         BNZ   WTOEXIT                 no, exit
+         OI    DSAFLG1,DSA@STAE        recovery established
+*
+**       Activate listener recovery
+*
+         L     R11,SSCTSUSE            ZXVT
+         USING ZXVT,R11                set addressability
+         CLC   ZXVTID,=CL4'ZXVT'       valid indeed?
+         BNE   WTOEXIT                 no, exit
+         TM    ZXVTFLG1,ZXVT@ACT       server active?
+         BZ    WTOEXIT                 no, exit
+         ST    R11,ZRWAZXVT            init ZXVT address
+         MVC   ZRWASUBN,ZXVTSUBN       init ZXPC server
+         MVC   DSARSN,=AL4(RSN220)     set RSN
+         ZZRETRY WTOEXIT,RSN=DSARSN    activate recovery
+*
+**       Test execution mode
+*
+         ZZTRC WTO=0,SWKEY=NO,MID=MIDNAME,MOD=XPCWTO
+         TM    ZXVTFLG3,ZXVT@TST       MODE=TEST?
+         BZ    WTO0000                 no
+         ZZRUN MODE=TEST,EXIT=WTOEXIT  yes
+*
+**       Prevent WTO recursive loop
+*
+WTO0000  DS    0H
+         USING PSA,0
+         L     R1,PSATOLD              TCB address
+         L     R15,TCBRBP-TCB(,R1)     SVRB address
+         ICM   R15,7,RBLINKB-RBBASIC(R15) previous RB
+         CLR   R1,R15                  points to TCB?
+         BE    WTO0010                 yes, carry on
+         LA    R1,RBBASIC-RBINTCOD     offset to interrupt code
+         LNR   R1,R1                   make it negative
+         AL    R1,RBLINK-RBBASIC(,R15) point at RBINTCOD
+         LH    R1,0(,R1)               get interrupt code
+         CH    R1,=AL2(35)             recursive SVC issued?
+         BE    WTOEXIT                 yes, exit
+         ZZTRC WTO=1,SWKEY=NO          trace
+*
+**       Update listener entry count
+*
+WTO0010  DS    0H
+         L     R2,ZXVTWTOC             listeners count
+         LA    R3,1(,R2)               add one
+         CS    R2,R3,ZXVTWTOC          update count
+         BNE   WTO0010                 changed: try again
+         ZZTRC WTO=2,SWKEY=NO          trace
+*
+**       Extract WTO message text
+*
+         TM    WQEXA,WQEWTOR           WTOR?
+         BZ    WTO0020                 no
+         XR    R2,R2
+         IC    R2,WQERIDL              reply ID length
+         LA    R3,WQETXT               WTOR msg text
+         LA    R3,1(R2,R3)             skip chars
+         MVC   DSAWTOBF,0(R3)          copy msg text
+         MVC   ZXVTWQET,0(R3)          debug
+         MVC   DSAREPLY,WQERPYIB       copy ID
+         ZZTRC WTO=3,SWKEY=NO          trace
+         B     WTO0030                 carry on
+*
+WTO0020  DS    0H
+         MVC   DSAWTOBF,WQETXT+1       copy msg text
+         MVC   ZXVTWQET,WQETXT+1       debug
+         ZZTRC WTO=4,SWKEY=NO          trace
+*
+**       Call WTO event listeners
+*
+WTO0030  DS    0H
+         LA    R5,MSGTABLE             listener table
+         USING MSG,R5                  set addressability
+         ZZTRC WTO=5,SWKEY=NO          trace
+*
+WTO0040  DS    0H
+         CLC   MSGEPA,MSGTEND          end of table?
+         BE    WTOEXIT                 yes, exit
+         L     R15,MSGEPA              routine EPA
+         BSM   R15,0                   set AMODE
+         BASR  R14,R15                 call routine
+         MVC   ZRWASECT,MIDNAME        ID mainline
+         MVC   DSARSN,=AL4(RSN220)     set RSN
+         ZZRETRY WTOEXIT,RSN=DSARSN    reset retry address
+         ZZTRC WTO=6,SWKEY=NO          trace
+         LA    R5,MSG@SIZE(,R5)        next MSG entry
+         B     WTO0040                 loop
+*---------------------------------------------------------------------*
+*        Exit Routine                                                 *
+*--------+---------+---------+---------+---------+---------+---------+*
+WTOEXIT  DS    0H
+         TM    DSAFLG1,DSA@STAE        recovery active?
+         BZ    WTOXIT00                no
+         ESTAE 0,TOKEN=DSATOKN         deactivate recovery
+*
+WTOXIT00 DS    0H
+         L     R13,GPR@BWD(,R13)       caller savearea
+         SPKA  X'80'(0)                problem key
+         STORAGE RELEASE,COND=NO,CALLRKY=YES,                          +
+               ADDR=(12),LENGTH=DSA@SIZE,SP=130,LINKAGE=SYSTEM
+         SPKA  0(0)                    supervisor key
+*
+WTOXIT99 DS    0H
+         LM    R14,R12,GPR@R14(R13)    restore caller's regs
+         XR    R15,R15                 RC
+         BR    R14                     return
+*---------------------------------------------------------------------*
+*        Constants                                                    *
+*--------+---------+---------+---------+---------+---------+---------+*
+         DS    0F
+XPCRTM   DC    V(XPCRTM)               XPCRTM
+ESTAE    ESTAE 0,MF=L                  listform
+ESTAEL   EQU   *-ESTAE
+*---------------------------------------------------------------------*
+*        WTO listener routine table                                   *
+*--------+---------+---------+---------+---------+---------+---------+*
+MSGTABLE DS    0F
+         ZZTAB GEN=MSG,TYPE=INITIAL
+*
+         ZZTAB GEN=MSG,                                                +
+               TYPE=ENTRY,                                             +
+               EP=LISTEN               WTO event listener routine
+*
+         ZZTAB GEN=MSG,                                                +
+               TYPE=ENTRY,                                             +
+               EP=DB2MSG               DB2 event listener routine
+*
+         ZZTAB GEN=MSG,                                                +
+               TYPE=ENTRY,                                             +
+               EP=XCFMSG               XCF event listener routine
+*
+         ZZTAB GEN=MSG,                                                +
+               TYPE=ENTRY,                                             +
+               EP=SOMINI               SOM=event listener routine
+*
+         ZZTAB GEN=MSG,                                                +
+               TYPE=ENTRY,                                             +
+               EP=EOMINI               EOM=event listener routine
+*
+         ZZTAB GEN=MSG,TYPE=FINAL
+*
+MSG@TSZE EQU   *-MSGTABLE
+         DS    0F
+MSGTEND  DC    AL4(-1)                 end-of-table marker
+*---------------------------------------------------------------------*
+*        Literals                                                     *
+*--------+---------+---------+---------+---------+---------+---------+*
+         LTORG ,
+         DROP  ,
+*/********************************************************************/
+*/*                                                                  */
+*/* Name:        LISTEN                                              */
+*/*                                                                  */
+*/* Function:    Call message event listener routine                 */
+*/*                                                                  */
+*/* Input Regs:  R6  WQE  address                                    */
+*/*              R7  SSCT address                                    */
+*/*              R8  SSOB address                                    */
+*/*              R9  ZRWA address                                    */
+*/*              R11 ZXVT address                                    */
+*/*              R12 DSA  address                                    */
+*/*              R13 Savearea address                                */
+*/*              R14 Return address                                  */
+*/*              R15 Entry address                                   */
+*/*                                                                  */
+*/* Regs Usage:  R4  ZASY address                                    */
+*/*              R5  ZXSA address                                    */
+*/*              R6  WQE  address                                    */
+*/*              R7  ZXRE address                                    */
+*/*              R8  SSOB address                                    */
+*/*              R9  ZRWA address                                    */
+*/*              R10 base address                                    */
+*/*              R11 ZXVT address                                    */
+*/*              R12 DSA  address                                    */
+*/*              R13 savearea address                                */
+*/*                                                                  */
+*/* Output Regs: R15 Return code                                     */
+*/*              R0  Reason code                                     */
+*/*                                                                  */
+*/********************************************************************/
+*/-------+---------+---------+---------+---------+---------+---------*/
+LISTEN   DS    0H
+         USING DSA,R12
+         B     12(,R15)
+LISTNID  DC    CL8'LISTEN'             ID
+         STM   R14,R12,GPR@R14(R13)    save callers regs
+         LR    R10,R15                 set base address
+         USING LISTEN,R10              base addressability
+         LA    R1,DSASBSA              subroutine savearea
+         ST    R13,GPR@BWD(,R1)        chain,
+         ST    R1,GPR@FWD(,R13)        save,
+         LR    R13,R1                  areas.
+*
+**       Establish addressability
+*
+         USING WQE,R6
+         USING SSOB,R8
+         USING ZRWA,R9
+         USING ZXVT,R11
+         LA    R4,DSAZASY              ZASY address
+         USING ZASY,R4                 set addressability
+         XC    ZASY(ASY@CLR),ZASY      zero ZASY
+         MVC   ASYID,=CL4'ZASY'        ID ZASY
+         LA    R5,DSAZXSA              ZXSA address
+         USING ZXSA,R5                 set addressability
+         MVC   XSAID,=CL4'ZXSA'        ID
+         MVC   ZRWASECT,LISTNID        ID
+*
+**       Activate recovery
+*
+         MVC   DSARC,=AL4(8)           set initial RC
+         MVC   DSARSN,=AL4(RSN256)     set RSN
+         ZZRETRY LISTNXIT,RSN=DSARSN   set retry address
+         ZZTRC LSN=A,SWKEY=NO,MID=LISTNID,MOD=XPCWTO
+*
+**       Locate listener ZXRE entry
+*
+         XR    R7,R7
+         L     R3,ZXVTWTOQ             ZXRE queue
+         CS    R7,R3,ZXVTWTOQ          listeners queued?
+         BZ    LISTNXIT                no, exit
+         USING ZXRE,R7                 ZXRE addressability
+         ZZTRC LSN=B,SWKEY=NO          trace
+         B     LISTN10                 san queue
+*
+LISTN00  DS    0H
+         ICM   R7,15,XRECHPTR          last entry?
+         BZ    LISTNXIT                yes, exit
+         XC    ZASY(ASY@CLR),ZASY      zero ZASY
+         MVC   ASYID,=CL4'ZASY'        ID ZASY
+         XC    ASYXDATA,ASYXDATA       zero event data
+         XC    ASYXINDV,ASYXINDV       zero event data
+         MVC   ASYEVENT,ZXVTBLKS       clear trigger data
+         ZZTRC LSN=C,SWKEY=NO          trace
+*
+**       Parse message trigger
+*
+LISTN10  DS    0H
+         CLC   XREID,=CL4'ZXRE'        valid?
+         BNE   LISTNXIT                no, exit
+         TM    XREFLAG1,XRE@OFFQ       entry disabled?
+         BNZ   LISTN00                 yes, next entry
+         TM    XREOPTS2,XRE@WAM        WTO=message?
+         BZ    LISTN00                 no, next entry
+         ZZTRC LSN=D,SWKEY=NO          trace
+*
+         XC    ZXSA(XSA@SIZE),ZXSA
+         MVC   XSAID,=CL4'ZXSA'        ID
+         LA    R1,DSAWTOBF             source data address
+         ST    R1,XSASDATA             set it
+         MVC   DSAEVENT,XREEVENT       copy event data
+         LA    R1,DSAEVENT             compare data address
+         ST    R1,XSACDATA             set it
+         ZZCALL ZXSA,EP=PARSE
+         LTR   R15,R15                 data match?
+         BZ    LISTN20                 yes
+         MVC   ZXVTDBG3(XRE@DATA),DSAEVENT
+         MVC   ZXVTDBG4,DSAWTOBF       debug
+         ZZTRC LSN=E,SWKEY=NO          trace
+         B     LISTN00                 next entry
+*
+**       Initialize trigger environment
+*
+LISTN20  DS    0H
+         XC    ZXSA(XSA@SIZE),ZXSA
+         MVC   XSAID,=CL4'ZXSA'        ID
+         ST    R7,XSAZXRE              ZXRE
+         ST    R4,XSAZASY              ZASY
+         LA    R1,DSAZXSA2             XSA2
+         ST    R1,XSAZXSA2             set XSA2
+         ZZCALL ZXSA,EP=ASYTRG
+         LTR   R15,R15                 trigger match?
+         BZ    LISTN30                 yes
+         ZZTRC LSN=F,SWKEY=NO          trace
+         B     LISTN00                 next entry
+*
+**       Inititialize listener environment
+*
+LISTN30  DS    0H
+         XC    ZXSA(XSA@SIZE),ZXSA
+         MVC   XSAID,=CL4'ZXSA'        ID
+         ST    R7,XSAZXRE              ZXRE
+         ST    R4,XSAZASY              ZASY
+         LA    R1,DSAZXSA2             XSA2
+         ST    R1,XSAZXSA2             set XSA2
+         ZZCALL ZXSA,EP=ASYRUN
+         LTR   R15,R15                 initialized?
+         BZ    LISTN40                 yes
+         ZZTRC LSN=G,SWKEY=NO          trace
+         B     LISTN00                 next entry
+*
+**       Extract system event data
+*
+LISTN40  DS    0H
+         MVC   ASYTYPE,XRETYPE         system event type
+         MVC   ASYTSSOB,DSASSOB        SSOB
+         MVC   ASYXSSOB(SSOBHSIZ),SSOB copy SSOB
+         MVC   ASYTRPLY,DSAREPLY       REPLY-ID
+         MVC   ASYXDATA,DSAWTOBF       event data
+         L     R2,SSOBINDV             SSWT
+         LA    R1,SSWTSIZE             SSWT size
+         CL    R1,=AL4(ASYX@INZ)       GT ASYX@INZ?
+         BH    LISTN50                 yes
+         MVC   ASYXINDV(SSWTSIZE),0(R2) complete copy
+         ZZTRC LSN=H,SWKEY=NO          trace
+         B     LISTN60
+*
+LISTN50  DS    0H
+         MVC   ASYXINDV(ASYX@INZ),0(R2) truncated copy
+         ZZTRC LSN=I,SWKEY=NO          trace
+*
+**       Schedule WTO listener routine
+*
+LISTN60  DS    0H
+         XC    ZXSA(XSA@SIZE),ZXSA
+         MVC   XSAID,=CL4'ZXSA'        ID
+         ST    R7,XSAZXRE              ZXRE
+         ST    R4,XSAZASY              ZASY
+         LA    R1,DSAZXSA2             XSA2
+         ST    R1,XSAZXSA2             set XSA2
+         ZZCALL ZXSA,EP=ASYSCH
+         LTR   R15,R15                 listener scheduled?
+         BNZ   LISTN70                 no
+         ZZTRC LSN=J,SWKEY=NO          trace
+         B     LISTN00                 next entry
+*
+LISTN70  DS    0H
+         ZZTRC LSN=K,SWKEY=NO          trace
+         B     LISTN00                 next entry
+*
+LISTNXIT DS    0H
+         L     R13,GPR@BWD(,R13)       mainline savearea
+         LM    R15,R1,DSAOPAR          output regs
+         LM    R2,R12,GPR@R2(R13)      restore regs
+         L     R14,GPR@R14(,R13)       return address
+         BR    R14                     return
+*---------------------------------------------------------------------*
+*        Literals                                                     *
+*--------+---------+---------+---------+---------+---------+---------+*
+         LTORG ,
+         DROP  ,
+*/********************************************************************/
+*/*                                                                  */
+*/* Name:        XCFMSG                                              */
+*/*                                                                  */
+*/* Function:    Call XCF message event listener routine             */
+*/*                                                                  */
+*/* Input Regs:  R6  WQE  address                                    */
+*/*              R7  SSCT address                                    */
+*/*              R8  SSOB address                                    */
+*/*              R9  ZRWA address                                    */
+*/*              R11 ZXVT address                                    */
+*/*              R12 DSA  address                                    */
+*/*              R13 Savearea address                                */
+*/*              R14 Return address                                  */
+*/*              R15 Entry address                                   */
+*/*                                                                  */
+*/* Regs Usage:  R4  ZASY address                                    */
+*/*              R5  ZXSA address                                    */
+*/*              R6  WQE  address                                    */
+*/*              R7  ZXRE address                                    */
+*/*              R8  SSOB address                                    */
+*/*              R9  ZRWA address                                    */
+*/*              R10 base address                                    */
+*/*              R11 ZXVT address                                    */
+*/*              R12 DSA  address                                    */
+*/*              R13 savearea address                                */
+*/*                                                                  */
+*/* Output Regs: R15 Return code                                     */
+*/*              R0  Reason code                                     */
+*/*                                                                  */
+*/********************************************************************/
+*/-------+---------+---------+---------+---------+---------+---------*/
+XCFMSG   DS    0H
+         USING DSA,R12
+         B     12(,R15)
+XCFMID   DC    CL8'XCFMSG'             ID
+         STM   R14,R12,GPR@R14(R13)    save callers regs
+         LR    R10,R15                 set base address
+         USING XCFMSG,R10              base addressability
+         LA    R1,DSASBSA              subroutine savearea
+         ST    R13,GPR@BWD(,R1)        chain,
+         ST    R1,GPR@FWD(,R13)        save,
+         LR    R13,R1                  areas.
+*
+**       Establish addressability
+*
+         USING WQE,R6
+         USING SSOB,R8
+         USING ZRWA,R9
+         USING ZXVT,R11
+         LA    R4,DSAZASY              ZASY address
+         USING ZASY,R4                 set addressability
+         XC    ZASY(ASY@CLR),ZASY      zero ZASY
+         MVC   ASYID,=CL4'ZASY'        ID ZASY
+         LA    R5,DSAZXSA              ZXSA address
+         USING ZXSA,R5                 set addressability
+         MVC   XSAID,=CL4'ZXSA'        ID
+         MVC   ZRWASECT,XCFMID         ID
+*
+**       Activate recovery
+*
+         MVC   DSARC,=AL4(8)           set initial RC
+         MVC   DSARSN,=AL4(RSN400)     set RSN
+         ZZRETRY XCFMSXIT,RSN=DSARSN   set retry address
+         ZZTRC XCF=A,SWKEY=NO,MID=XCFMID,MOD=XPCWTO
+*
+**       Locate listener ZXRE entry
+*
+         XR    R7,R7
+         L     R3,ZXVTXCFQ             ZXRE queue
+         CS    R7,R3,ZXVTXCFQ          listeners queued?
+         BZ    XCFMSXIT                no, exit
+         USING ZXRE,R7                 ZXRE addressability
+         ZZTRC XCF=B,SWKEY=NO          trace
+         B     XCFMS10                 san queue
+*
+XCFMS00  DS    0H
+         ICM   R7,15,XRECHPTR          last entry?
+         BZ    XCFMSXIT                yes, exit
+         XC    ZASY(ASY@CLR),ZASY      zero ZASY
+         MVC   ASYID,=CL4'ZASY'        ID ZASY
+         XC    ASYXDATA,ASYXDATA       zero event data
+         XC    ASYXINDV,ASYXINDV       zero event data
+         MVC   ASYEVENT,ZXVTBLKS       clear trigger data
+         ZZTRC XCF=C,SWKEY=NO          trace
+*
+**       Parse message trigger
+*
+XCFMS10  DS    0H
+         CLC   XREID,=CL4'ZXRE'        valid?
+         BNE   XCFMSXIT                no, exit
+         TM    XREFLAG1,XRE@OFFQ       entry disabled?
+         BNZ   XCFMS00                 yes, next entry
+         TM    XREOPTS2,XRE@XXA        XCF=*?
+         BNZ   XCFMS15                 yes
+         TM    XREOPTS4,XRE@XXF        XCF=message?
+         BZ    XCFMS00                 no, next entry
+         ZZTRC XCF=D,SWKEY=NO          trace
+*
+XCFMS15  DS    0H
+         CLC   DSAWTOBF(3),=CL3'IXC'   XCF message?
+         BE    XCFMS20                 yes
+         CLC   DSAWTOBF(3),=CL3'IXL'   XES message?
+         BNE   XCFMS00                 no, next entry
+         ZZTRC XCF=E,SWKEY=NO          trace
+*
+XCFMS20  DS    0H
+         TM    XREOPTS2,XRE@XXA        XCF=*?
+         BNZ   XCFMS25                 yes, skip parse
+         XC    ZXSA(XSA@SIZE),ZXSA
+         MVC   XSAID,=CL4'ZXSA'        ID
+         LA    R1,DSAWTOBF             source data address
+         ST    R1,XSASDATA             set it
+         MVC   DSAEVENT,XREEVENT       copy event data
+         LA    R1,DSAEVENT             compare data address
+         ST    R1,XSACDATA             set it
+         ZZCALL ZXSA,EP=PARSE
+         LTR   R15,R15                 data match?
+         BZ    XCFMS25                 yes
+         MVC   ZXVTDBG3(XRE@DATA),DSAEVENT
+         MVC   ZXVTDBG4,DSAWTOBF       debug
+         ZZTRC XCF=F,SWKEY=NO          trace
+         B     XCFMS00                 next entry
+*
+**       Initialize trigger environment
+*
+XCFMS25  DS    0H
+         XC    ZXSA(XSA@SIZE),ZXSA
+         MVC   XSAID,=CL4'ZXSA'        ID
+         ST    R7,XSAZXRE              ZXRE
+         ST    R4,XSAZASY              ZASY
+         LA    R1,DSAZXSA2             XSA2
+         ST    R1,XSAZXSA2             set XSA2
+         ZZCALL ZXSA,EP=ASYTRG
+         LTR   R15,R15                 trigger match?
+         BZ    XCFMS30                 yes
+         ZZTRC XCF=G,SWKEY=NO          trace
+         B     XCFMS00                 next entry
+*
+**       Inititialize listener environment
+*
+XCFMS30  DS    0H
+         XC    ZXSA(XSA@SIZE),ZXSA
+         MVC   XSAID,=CL4'ZXSA'        ID
+         ST    R7,XSAZXRE              ZXRE
+         ST    R4,XSAZASY              ZASY
+         LA    R1,DSAZXSA2             XSA2
+         ST    R1,XSAZXSA2             set XSA2
+         ZZCALL ZXSA,EP=ASYRUN
+         LTR   R15,R15                 initialized?
+         BZ    XCFMS40                 yes
+         ZZTRC XCF=H,SWKEY=NO          trace
+         B     XCFMS00                 next entry
+*
+**       Extract system event data
+*
+XCFMS40  DS    0H
+         MVC   ASYTYPE,XRETYPE         system event type
+         MVC   ASYTSSOB,DSASSOB        SSOB
+         MVC   ASYXSSOB(SSOBHSIZ),SSOB copy SSOB
+         MVC   ASYTRPLY,DSAREPLY       REPLY-ID
+         MVC   ASYXDATA,DSAWTOBF       event data
+         L     R2,SSOBINDV             SSWT
+         LA    R1,SSWTSIZE             SSWT size
+         CL    R1,=AL4(ASYX@INZ)       GT ASYX@INZ?
+         BH    XCFMS50                 yes
+         MVC   ASYXINDV(SSWTSIZE),0(R2) complete copy
+         ZZTRC XCF=J,SWKEY=NO          trace
+         B     XCFMS60
+*
+XCFMS50  DS    0H
+         MVC   ASYXINDV(ASYX@INZ),0(R2) truncated copy
+         ZZTRC XCF=K,SWKEY=NO          trace
+*
+**       Schedule WTO listener routine
+*
+XCFMS60  DS    0H
+         XC    ZXSA(XSA@SIZE),ZXSA
+         MVC   XSAID,=CL4'ZXSA'        ID
+         ST    R7,XSAZXRE              ZXRE
+         ST    R4,XSAZASY              ZASY
+         LA    R1,DSAZXSA2             XSA2
+         ST    R1,XSAZXSA2             set XSA2
+         ZZCALL ZXSA,EP=ASYSCH
+         LTR   R15,R15                 listener scheduled?
+         BNZ   XCFMS70                 no
+         ZZTRC XCF=L,SWKEY=NO          trace
+         B     XCFMS00                 next entry
+*
+XCFMS70  DS    0H
+         ZZTRC XCF=M,SWKEY=NO          trace
+         B     XCFMS00                 next entry
+*
+XCFMSXIT DS    0H
+         L     R13,GPR@BWD(,R13)       mainline savearea
+         LM    R15,R1,DSAOPAR          output regs
+         LM    R2,R12,GPR@R2(R13)      restore regs
+         L     R14,GPR@R14(,R13)       return address
+         BR    R14                     return
+*---------------------------------------------------------------------*
+*        Literals                                                     *
+*--------+---------+---------+---------+---------+---------+---------+*
+         LTORG ,
+         DROP  ,
+*/********************************************************************/
+*/*                                                                  */
+*/* Name:        DB2MSG                                              */
+*/*                                                                  */
+*/* Function:    Call XCF message event listener routine             */
+*/*                                                                  */
+*/* Input Regs:  R6  WQE  address                                    */
+*/*              R7  SSCT address                                    */
+*/*              R8  SSOB address                                    */
+*/*              R9  ZRWA address                                    */
+*/*              R11 ZXVT address                                    */
+*/*              R12 DSA  address                                    */
+*/*              R13 Savearea address                                */
+*/*              R14 Return address                                  */
+*/*              R15 Entry address                                   */
+*/*                                                                  */
+*/* Regs Usage:  R4  ZASY address                                    */
+*/*              R5  ZXSA address                                    */
+*/*              R6  WQE  address                                    */
+*/*              R7  ZXRE address                                    */
+*/*              R8  SSOB address                                    */
+*/*              R9  ZRWA address                                    */
+*/*              R10 base address                                    */
+*/*              R11 ZXVT address                                    */
+*/*              R12 DSA  address                                    */
+*/*              R13 savearea address                                */
+*/*                                                                  */
+*/* Output Regs: R15 Return code                                     */
+*/*              R0  Reason code                                     */
+*/*                                                                  */
+*/********************************************************************/
+*/-------+---------+---------+---------+---------+---------+---------*/
+DB2MSG   DS    0H
+         USING DSA,R12
+         B     12(,R15)
+DB2MID   DC    CL8'DB2MSG'             ID
+         STM   R14,R12,GPR@R14(R13)    save callers regs
+         LR    R10,R15                 set base address
+         USING DB2MSG,R10              base addressability
+         LA    R1,DSASBSA              subroutine savearea
+         ST    R13,GPR@BWD(,R1)        chain,
+         ST    R1,GPR@FWD(,R13)        save,
+         LR    R13,R1                  areas.
+*
+**       Establish addressability
+*
+         USING WQE,R6
+         USING SSOB,R8
+         USING ZRWA,R9
+         USING ZXVT,R11
+         LA    R4,DSAZASY              ZASY address
+         USING ZASY,R4                 set addressability
+         XC    ZASY(ASY@CLR),ZASY      zero ZASY
+         MVC   ASYID,=CL4'ZASY'        ID ZASY
+         LA    R5,DSAZXSA              ZXSA address
+         USING ZXSA,R5                 set addressability
+         MVC   XSAID,=CL4'ZXSA'        ID
+         MVC   ZRWASECT,DB2MID         ID
+*
+**       Activate recovery
+*
+         MVC   DSARC,=AL4(8)           set initial RC
+         MVC   DSARSN,=AL4(RSN400)     set RSN
+         ZZRETRY DB2MSXIT,RSN=DSARSN   set retry address
+         ZZTRC DB2=A,SWKEY=NO,MID=DB2MID,MOD=XPCWTO
+*
+**       Locate listener ZXRE entry
+*
+         XR    R7,R7
+         L     R3,ZXVTDB2Q             ZXRE queue
+         CS    R7,R3,ZXVTDB2Q          listeners queued?
+         BZ    DB2MSXIT                no, exit
+         USING ZXRE,R7                 ZXRE addressability
+         ZZTRC DB2=B,SWKEY=NO          trace
+         B     DB2MS10                 san queue
+*
+DB2MS00  DS    0H
+         ICM   R7,15,XRECHPTR          last entry?
+         BZ    DB2MSXIT                yes, exit
+         XC    ZASY(ASY@CLR),ZASY      zero ZASY
+         MVC   ASYID,=CL4'ZASY'        ID ZASY
+         XC    ASYXDATA,ASYXDATA       zero event data
+         XC    ASYXINDV,ASYXINDV       zero event data
+         MVC   ASYEVENT,ZXVTBLKS       clear trigger data
+         ZZTRC DB2=C,SWKEY=NO          trace
+*
+**       Parse message trigger
+*
+DB2MS10  DS    0H
+         CLC   XREID,=CL4'ZXRE'        valid?
+         BNE   DB2MSXIT                no, exit
+         TM    XREFLAG1,XRE@OFFQ       entry disabled?
+         BNZ   DB2MS00                 yes, next entry
+         TM    XREOPTS1,XRE@DBA        DB2=*?
+         BNZ   DB2MS20                 yes
+         TM    XREOPTS1,XRE@DBX        DB2=message?
+         BZ    DB2MS00                 no, next entry
+         ZZTRC DB2=D,SWKEY=NO          trace
+*
+DB2MS20  DS    0H
+         CLC   DSAWTOBF(3),=CL3'DSN'   DSN message?
+         BNE   DB2MS00                 no, next entry
+         TM    XREOPTS1,XRE@DBA        DB2=*?
+         BNZ   DB2MS25                 yes, skip parse
+         XC    ZXSA(XSA@SIZE),ZXSA
+         MVC   XSAID,=CL4'ZXSA'        ID
+         LA    R1,DSAWTOBF             source data address
+         ST    R1,XSASDATA             set it
+         MVC   DSAEVENT,XREEVENT       copy event data
+         LA    R1,DSAEVENT             compare data address
+         ST    R1,XSACDATA             set it
+         ZZCALL ZXSA,EP=PARSE
+         LTR   R15,R15                 data match?
+         BZ    DB2MS25                 yes
+         MVC   ZXVTDBG3(XRE@DATA),DSAEVENT
+         MVC   ZXVTDBG4,DSAWTOBF       debug
+         ZZTRC DB2=F,SWKEY=NO          trace
+         B     DB2MS00                 next entry
+*
+**       Initialize trigger environment
+*
+DB2MS25  DS    0H
+         XC    ZXSA(XSA@SIZE),ZXSA
+         MVC   XSAID,=CL4'ZXSA'        ID
+         ST    R7,XSAZXRE              ZXRE
+         ST    R4,XSAZASY              ZASY
+         LA    R1,DSAZXSA2             XSA2
+         ST    R1,XSAZXSA2             set XSA2
+         ZZCALL ZXSA,EP=ASYTRG
+         LTR   R15,R15                 trigger match?
+         BZ    DB2MS30                 yes
+         ZZTRC DB2=G,SWKEY=NO          trace
+         B     DB2MS00                 next entry
+*
+**       Inititialize listener environment
+*
+DB2MS30  DS    0H
+         XC    ZXSA(XSA@SIZE),ZXSA
+         MVC   XSAID,=CL4'ZXSA'        ID
+         ST    R7,XSAZXRE              ZXRE
+         ST    R4,XSAZASY              ZASY
+         LA    R1,DSAZXSA2             XSA2
+         ST    R1,XSAZXSA2             set XSA2
+         ZZCALL ZXSA,EP=ASYRUN
+         LTR   R15,R15                 initialized?
+         BZ    DB2MS40                 yes
+         ZZTRC DB2=H,SWKEY=NO          trace
+         B     DB2MS00                 next entry
+*
+**       Extract system event data
+*
+DB2MS40  DS    0H
+         MVC   ASYTYPE,XRETYPE         system event type
+         MVC   ASYTSSOB,DSASSOB        SSOB
+         MVC   ASYXSSOB(SSOBHSIZ),SSOB copy SSOB
+         MVC   ASYTRPLY,DSAREPLY       REPLY-ID
+         MVC   ASYXDATA,DSAWTOBF       event data
+         L     R2,SSOBINDV             SSWT
+         LA    R1,SSWTSIZE             SSWT size
+         CL    R1,=AL4(ASYX@INZ)       GT ASYX@INZ?
+         BH    DB2MS50                 yes
+         MVC   ASYXINDV(SSWTSIZE),0(R2) complete copy
+         ZZTRC DB2=J,SWKEY=NO          trace
+         B     DB2MS60
+*
+DB2MS50  DS    0H
+         MVC   ASYXINDV(ASYX@INZ),0(R2) truncated copy
+         ZZTRC DB2=K,SWKEY=NO          trace
+*
+**       Schedule WTO listener routine
+*
+DB2MS60  DS    0H
+         XC    ZXSA(XSA@SIZE),ZXSA
+         MVC   XSAID,=CL4'ZXSA'        ID
+         ST    R7,XSAZXRE              ZXRE
+         ST    R4,XSAZASY              ZASY
+         LA    R1,DSAZXSA2             XSA2
+         ST    R1,XSAZXSA2             set XSA2
+         ZZCALL ZXSA,EP=ASYSCH
+         LTR   R15,R15                 listener scheduled?
+         BNZ   DB2MS70                 no
+         ZZTRC DB2=L,SWKEY=NO          trace
+         B     DB2MS00                 next entry
+*
+DB2MS70  DS    0H
+         ZZTRC DB2=M,SWKEY=NO          trace
+         B     DB2MS00                 next entry
+*
+DB2MSXIT DS    0H
+         L     R13,GPR@BWD(,R13)       mainline savearea
+         LM    R15,R1,DSAOPAR          output regs
+         LM    R2,R12,GPR@R2(R13)      restore regs
+         L     R14,GPR@R14(,R13)       return address
+         BR    R14                     return
+*---------------------------------------------------------------------*
+*        Literals                                                     *
+*--------+---------+---------+---------+---------+---------+---------+*
+         LTORG ,
+         DROP  ,
+*/********************************************************************/
+*/*                                                                  */
+*/* Name:        SOMINI                                              */
+*/*                                                                  */
+*/* Function:    Call start of memory (SOM) listener routine         */
+*/*                                                                  */
+*/* Input Regs:  R6  WQE  address                                    */
+*/*              R7  SSCT address                                    */
+*/*              R8  SSOB address                                    */
+*/*              R9  ZRWA address                                    */
+*/*              R11 ZXVT address                                    */
+*/*              R12 DSA  address                                    */
+*/*              R13 Savearea address                                */
+*/*              R14 Return address                                  */
+*/*              R15 Entry address                                   */
+*/*                                                                  */
+*/* Regs Usage:  R4  ZASY address                                    */
+*/*              R5  ZXSA address                                    */
+*/*              R6  WQE  address                                    */
+*/*              R7  ZXRE address                                    */
+*/*              R8  SSOB address                                    */
+*/*              R9  ZRWA address                                    */
+*/*              R10 base address                                    */
+*/*              R11 ZXVT address                                    */
+*/*              R12 DSA  address                                    */
+*/*              R13 savearea address                                */
+*/*                                                                  */
+*/* Output Regs: R15 Return code                                     */
+*/*              R0  Reason code                                     */
+*/*                                                                  */
+*/********************************************************************/
+*/-------+---------+---------+---------+---------+---------+---------*/
+SOMINI   DS    0H
+         USING DSA,R12
+         B     12(,R15)
+SOMINID  DC    CL8'SOMINI'             ID
+         STM   R14,R12,GPR@R14(R13)    save callers regs
+         LR    R10,R15                 set base address
+         USING SOMINI,R10              base addressability
+         LA    R1,DSASBSA              subroutine savearea
+         ST    R13,GPR@BWD(,R1)        chain,
+         ST    R1,GPR@FWD(,R13)        save,
+         LR    R13,R1                  areas.
+*
+**       Establish addressability
+*
+         USING WQE,R6
+         USING SSOB,R8
+         USING ZRWA,R9
+         USING ZXVT,R11
+         LA    R4,DSAZASY2             ZASY-2 address
+         USING ZASY,R4                 set addressability
+         XC    ZASY(ASY@CLR),ZASY      zero ZASY
+         MVC   ASYID,=CL4'ZASY'        ID ZASY
+         LA    R5,DSAZXSA              ZXSA address
+         USING ZXSA,R5                 set addressability
+         MVC   XSAID,=CL4'ZXSA'        ID
+         MVC   ZRWASECT,SOMINID        ID
+*
+**       Activate recovery
+*
+         MVC   DSARC,=AL4(8)           set initial RC
+         MVC   DSARSN,=AL4(RSN260)     set RSN
+         ZZRETRY SOMINXIT,RSN=DSARSN   set retry address
+         ZZTRC SOM=A,SWKEY=NO,MID=SOMINID,MOD=XPCWTO
+*
+**       Validity check SOM trigger
+*
+         ZZCALL SR=SOMWTO
+         LTR   R15,R15                 matched?
+         BZ    SOMINGO                 yes
+         ZZTRC SOM=B,SWKEY=NO          trace
+         B     SOMINXIT                exit
+*
+**       Locate listener ZXRE entry
+*
+SOMINGO  DS    0H
+         XR    R7,R7
+         L     R3,ZXVTSOMQ             ZXRE queue
+         CS    R7,R3,ZXVTSOMQ          listeners queued?
+         BZ    SOMINXIT                no, exit
+         USING ZXRE,R7                 ZXRE addressability
+         ZZTRC SOM=C,SWKEY=NO          trace
+         B     SOMIN10                 san queue
+*
+SOMIN00  DS    0H
+         ICM   R7,15,XRECHPTR          last entry?
+         BZ    SOMINXIT                yes, exit
+         XC    ZASY(ASY@CLR),ZASY      zero ZASY
+         MVC   ASYID,=CL4'ZASY'        ID ZASY
+         XC    ASYXDATA,ASYXDATA       zero event data
+         XC    ASYXINDV,ASYXINDV       zero event data
+         MVC   ASYEVENT,ZXVTBLKS       clear trigger data
+         ZZTRC SOM=D,SWKEY=NO          trace
+*
+**       Locate target jobname
+*
+SOMIN10  DS    0H
+         CLC   XREID,=CL4'ZXRE'        valid?
+         BNE   SOMINXIT                no, exit
+         TM    XREFLAG1,XRE@OFFQ       entry disabled?
+         BNZ   SOMIN00                 yes, next entry
+         TM    XREOPTS2,XRE@SAA        SOM=*?
+         BZ    SOMIN20                 no
+         ZZTRC SOM=E,SWKEY=NO          yes, trace
+         B     SOMIN30                 carry on
+*
+SOMIN20  DS    0H
+         XC    ZXSA(XSA@SIZE),ZXSA
+         MVC   XSAID,=CL4'ZXSA'        ID
+         LA    R1,DSAWTOBF+8           msg+8 has jobname
+         TM    ZXVTFLG2,ZXVT@CON       CON=YES?
+         BNZ   SOMIN25                 yes
+         LA    R1,DSAWTOBF+9           msg+9 has jobname
+*
+SOMIN25  DS    0H
+         ST    R1,XSASDATA             set it
+         MVC   DSAEVENT,ZXVTBLKS       clear event data
+         MVC   DSAEVENT(8),XREEJOBN    copy SOM jobname
+         LA    R1,DSAEVENT             compare data address
+         ST    R1,XSACDATA             set it
+         ZZCALL ZXSA,EP=PARJOB
+         MVC   DSAJOBNM,XSAPARJB       copy jobname
+         LTR   R15,R15                 data match?
+         BZ    SOMIN30                 yes
+         MVC   DSAJOBNM,ZXVTBLKS       clear jobname
+         ZZTRC SOM=F,SWKEY=NO          trace
+         B     SOMIN00                 next entry
+*
+**       Initialize trigger environment
+*
+SOMIN30  DS    0H
+         XC    ZXSA(XSA@SIZE),ZXSA
+         MVC   XSAID,=CL4'ZXSA'        ID
+         ST    R7,XSAZXRE              ZXRE
+         ST    R4,XSAZASY              ZASY
+         LA    R1,DSAZXSA2             XSA2
+         ST    R1,XSAZXSA2             set XSA2
+         ZZCALL ZXSA,EP=ASYTRG
+         LTR   R15,R15                 trigger match?
+         BZ    SOMIN40                 yes
+         ZZTRC SOM=G,SWKEY=NO          trace
+         B     SOMIN00                 next entry
+*
+**       Inititialize listener environment
+*
+SOMIN40  DS    0H
+         XC    ZXSA(XSA@SIZE),ZXSA
+         MVC   XSAID,=CL4'ZXSA'        ID
+         ST    R7,XSAZXRE              ZXRE
+         ST    R4,XSAZASY              ZASY
+         LA    R1,DSAZXSA2             XSA2
+         ST    R1,XSAZXSA2             set XSA2
+         ZZCALL ZXSA,EP=ASYRUN
+         LTR   R15,R15                 initialized?
+         BZ    SOMIN50                 yes
+         ZZTRC SOM=H,SWKEY=NO          trace
+         B     SOMIN00                 next entry
+*
+**       Extract system event data
+*
+SOMIN50  DS    0H
+         MVC   ASYTYPE,XRETYPE         system event type
+         XC    ASYTSSOB,ASYTSSOB       zero SSOB
+         XC    ASYTRPLY,ASYTRPLY       zero reply
+         XC    ASYXINDV,ASYXINDV       zero SSOBEXT
+         MVC   ASYXDATA,ZXVTBLKS       clear event data
+         MVC   ASYXDATA(8),DSAJOBNM    copy IEF403I jobname
+         ZZTRC SOM=I,SWKEY=NO          trace
+*
+**       Schedule SOM listener routine
+*
+         XC    ZXSA(XSA@SIZE),ZXSA
+         MVC   XSAID,=CL4'ZXSA'        ID
+         ST    R7,XSAZXRE              ZXRE
+         ST    R4,XSAZASY              ZASY
+         LA    R1,DSAZXSA2             XSA2
+         ST    R1,XSAZXSA2             set XSA2
+         ZZCALL ZXSA,EP=ASYSCH
+         LTR   R15,R15                 listener scheduled?
+         BNZ   SOMIN60                 no
+         ZZTRC SOM=I,SWKEY=NO          trace
+         B     SOMIN00                 next entry
+*
+SOMIN60  DS    0H
+         ZZTRC SOM=K,SWKEY=NO          trace
+         B     SOMIN00                 next entry
+*
+SOMINXIT DS    0H
+         L     R13,GPR@BWD(,R13)       mainline savearea
+         LM    R15,R1,DSAOPAR          output regs
+         LM    R2,R12,GPR@R2(R13)      restore regs
+         L     R14,GPR@R14(,R13)       return address
+         BR    R14                     return
+*---------------------------------------------------------------------*
+*        Constants/literals                                           *
+*--------+---------+---------+---------+---------+---------+---------+*
+         LTORG ,
+         DROP  ,
+*/********************************************************************/
+*/*                                                                  */
+*/* Name:        EOMINI                                              */
+*/*                                                                  */
+*/* Function:    Call end of memory (EOM) listener routine           */
+*/*                                                                  */
+*/* Input Regs:  R6  WQE  address                                    */
+*/*              R7  SSCT address                                    */
+*/*              R8  SSOB address                                    */
+*/*              R9  ZRWA address                                    */
+*/*              R11 ZXVT address                                    */
+*/*              R12 DSA  address                                    */
+*/*              R13 Savearea address                                */
+*/*              R14 Return address                                  */
+*/*              R15 Entry address                                   */
+*/*                                                                  */
+*/* Regs Usage:  R4  ZASY address                                    */
+*/*              R5  ZXSA address                                    */
+*/*              R6  WQE  address                                    */
+*/*              R7  ZXRE address                                    */
+*/*              R8  SSOB address                                    */
+*/*              R9  ZRWA address                                    */
+*/*              R10 base address                                    */
+*/*              R11 ZXVT address                                    */
+*/*              R12 DSA  address                                    */
+*/*              R13 savearea address                                */
+*/*                                                                  */
+*/* Output Regs: R15 Return code                                     */
+*/*              R0  Reason code                                     */
+*/*                                                                  */
+*/********************************************************************/
+*/-------+---------+---------+---------+---------+---------+---------*/
+EOMINI   DS    0H
+         USING DSA,R12
+         B     12(,R15)
+EOMINID  DC    CL8'EOMINI'             ID
+         STM   R14,R12,GPR@R14(R13)    save callers regs
+         LR    R10,R15                 set base address
+         USING EOMINI,R10              base addressability
+         LA    R1,DSASBSA              subroutine savearea
+         ST    R13,GPR@BWD(,R1)        chain,
+         ST    R1,GPR@FWD(,R13)        save,
+         LR    R13,R1                  areas.
+*
+**       Establish addressability
+*
+         USING WQE,R6
+         USING SSOB,R8
+         USING ZRWA,R9
+         USING ZXVT,R11
+         LA    R4,DSAZASY3             ZASY-3 address
+         USING ZASY,R4                 set addressability
+         XC    ZASY(ASY@CLR),ZASY      zero ZASY
+         MVC   ASYID,=CL4'ZASY'        ID ZASY
+         LA    R5,DSAZXSA              ZXSA address
+         USING ZXSA,R5                 set addressability
+         MVC   XSAID,=CL4'ZXSA'        ID
+         MVC   ZRWASECT,EOMINID        ID
+*
+**       Activate recovery
+*
+         MVC   DSARC,=AL4(RC8)         set initial RC
+         MVC   DSARSN,=AL4(RSN264)     set RSN
+         ZZRETRY EOMINXIT,RSN=DSARSN   set retry address
+         ZZTRC EOM=A,SWKEY=NO,MID=EOMINID,MOD=XPCWTO
+*
+**       Validity check EOM trigger
+*
+         ZZCALL SR=EOMWTO
+         LTR   R15,R15                 matched?
+         BZ    EOMINGO                 yes
+         ZZTRC EOM=B,SWKEY=NO          trace
+         B     EOMINXIT                exit
+*
+**       Locate listener ZXRE entry
+*
+EOMINGO  DS    0H
+         XR    R7,R7
+         L     R3,ZXVTEOMQ             ZXRE queue
+         CS    R7,R3,ZXVTEOMQ          listeners queued?
+         BZ    EOMINXIT                no, exit
+         USING ZXRE,R7                 ZXRE addressability
+         ZZTRC EOM=C,SWKEY=NO          trace
+         B     EOMIN10                 san queue
+*
+EOMIN00  DS    0H
+         ICM   R7,15,XRECHPTR          last entry?
+         BZ    EOMINXIT                yes, exit
+         XC    ZASY(ASY@CLR),ZASY      zero ZASY
+         MVC   ASYID,=CL4'ZASY'        ID ZASY
+         XC    ASYXDATA,ASYXDATA       zero event data
+         XC    ASYXINDV,ASYXINDV       zero event data
+         MVC   ASYEVENT,ZXVTBLKS       clear trigger data
+         ZZTRC EOM=D,SWKEY=NO          trace
+*
+**       Locate target jobname
+*
+EOMIN10  DS    0H
+         CLC   XREID,=CL4'ZXRE'        valid?
+         BNE   EOMINXIT                no, exit
+         TM    XREFLAG1,XRE@OFFQ       entry disabled?
+         BNZ   EOMIN00                 yes, next entry
+         TM    XREOPTS2,XRE@MAA        EOM=*?
+         BZ    EOMIN20                 no
+         ZZTRC EOM=E,SWKEY=NO          yes, trace
+         B     EOMIN30                 carry on
+*
+EOMIN20  DS    0H
+         XC    ZXSA(XSA@SIZE),ZXSA
+         MVC   XSAID,=CL4'ZXSA'        ID
+         LA    R1,DSAWTOBF+8           msg+8 has jobname
+         TM    ZXVTFLG2,ZXVT@CON       CON=YES?
+         BNZ   EOMIN25                 yes
+         LA    R1,DSAWTOBF+9           msg+9 has jobname
+*
+EOMIN25  DS    0H
+         ST    R1,XSASDATA             set it
+         MVC   DSAEVENT,ZXVTBLKS       clear event data
+         MVC   DSAEVENT(8),XREEJOBN    copy EOM jobname
+         LA    R1,DSAEVENT             compare data address
+         ST    R1,XSACDATA             set it
+         ZZCALL ZXSA,EP=PARJOB
+         MVC   DSAJOBNM,XSAPARJB       copy jobname
+         LTR   R15,R15                 data match?
+         BZ    EOMIN30                 yes
+         MVC   DSAJOBNM,ZXVTBLKS       clear jobname
+         ZZTRC EOM=F,SWKEY=NO          trace
+         B     EOMIN00                 next entry
+*
+**       Initialize trigger environment
+*
+EOMIN30  DS    0H
+         XC    ZXSA(XSA@SIZE),ZXSA
+         MVC   XSAID,=CL4'ZXSA'        ID
+         ST    R7,XSAZXRE              ZXRE
+         ST    R4,XSAZASY              ZASY
+         LA    R1,DSAZXSA2             XSA2
+         ST    R1,XSAZXSA2             set XSA2
+         ZZCALL ZXSA,EP=ASYTRG
+         LTR   R15,R15                 trigger match?
+         BZ    EOMIN40                 yes
+         ZZTRC EOM=G,SWKEY=NO          trace
+         B     EOMIN00                 next entry
+*
+**       Inititialize listener environment
+*
+EOMIN40  DS    0H
+         XC    ZXSA(XSA@SIZE),ZXSA
+         MVC   XSAID,=CL4'ZXSA'        ID
+         ST    R7,XSAZXRE              ZXRE
+         ST    R4,XSAZASY              ZASY
+         LA    R1,DSAZXSA2             XSA2
+         ST    R1,XSAZXSA2             set XSA2
+         ZZCALL ZXSA,EP=ASYRUN
+         LTR   R15,R15                 initialized?
+         BZ    EOMIN50                 yes
+         ZZTRC EOM=H,SWKEY=NO          trace
+         B     EOMIN00                 next entry
+*
+**       Extract system event data
+*
+EOMIN50  DS    0H
+         MVC   ASYTYPE,XRETYPE         event type
+         XC    ASYTSSOB,ASYTSSOB       zero SSOB
+         XC    ASYTRPLY,ASYTRPLY       zero reply
+         XC    ASYXINDV,ASYXINDV       zero SSOBEXT
+         MVC   ASYXDATA,ZXVTBLKS       clear event data
+         MVC   ASYXDATA(8),DSAJOBNM    copy IEF404I jobname
+         ZZTRC EOM=I,SWKEY=NO          trace
+*
+**       Schedule EOM listener routine
+*
+         XC    ZXSA(XSA@SIZE),ZXSA
+         MVC   XSAID,=CL4'ZXSA'        ID
+         ST    R7,XSAZXRE              ZXRE
+         ST    R4,XSAZASY              ZASY
+         LA    R1,DSAZXSA2             XSA2
+         ST    R1,XSAZXSA2             set XSA2
+         ZZCALL ZXSA,EP=ASYSCH
+         LTR   R15,R15                 listener scheduled?
+         BNZ   EOMIN60                 no
+         ZZTRC EOM=J,SWKEY=NO          trace
+         B     EOMIN00                 next entry
+*
+EOMIN60  DS    0H
+         ZZTRC EOM=K,SWKEY=NO          trace
+         B     EOMIN00                 next entry
+*
+EOMINXIT DS    0H
+         L     R13,GPR@BWD(,R13)       mainline savearea
+         LM    R15,R1,DSAOPAR          output regs
+         LM    R2,R12,GPR@R2(R13)      restore regs
+         L     R14,GPR@R14(,R13)       return address
+         BR    R14                     return
+*---------------------------------------------------------------------*
+*        Constants/literals                                           *
+*--------+---------+---------+---------+---------+---------+---------+*
+         LTORG ,
+         DROP  ,
+*/********************************************************************/
+*/*                                                                  */
+*/* Name:        SOMWTO                                              */
+*/*                                                                  */
+*/* Function:    Validity check SOM message trigger routine          */
+*/*                                                                  */
+*/* Input Regs:  R6  WQE  address                                    */
+*/*              R7  SSCT address                                    */
+*/*              R8  SSOB address                                    */
+*/*              R9  ZRWA address                                    */
+*/*              R11 ZXVT address                                    */
+*/*              R12 DSA  address                                    */
+*/*              R13 Savearea address                                */
+*/*              R14 Return address                                  */
+*/*              R15 Entry address                                   */
+*/*                                                                  */
+*/* Regs Usage:  R6  WQE  address                                    */
+*/*              R9  ZRWA address                                    */
+*/*              R10 base address                                    */
+*/*              R11 ZXVT address                                    */
+*/*              R12 DSA  address                                    */
+*/*              R13 savearea address                                */
+*/*                                                                  */
+*/* Output Regs: R15 Return code                                     */
+*/*              R0  Reason code                                     */
+*/*                                                                  */
+*/********************************************************************/
+*/-------+---------+---------+---------+---------+---------+---------*/
+SOMWTO   DS    0H
+         USING DSA,R12
+         B     12(,R15)
+SOMWTOD  DC    CL8'SOMWTO'             ID
+         STM   R14,R12,GPR@R14(R13)    save callers regs
+         LR    R10,R15                 set base address
+         USING SOMWTO,R10              base addressability
+         LA    R1,DSASUBS              subroutine savearea
+         ST    R13,GPR@BWD(,R1)        chain,
+         ST    R1,GPR@FWD(,R13)        save,
+         LR    R13,R1                  areas.
+*
+**       Establish addressability
+*
+         USING WQE,R6
+         USING SSOB,R8
+         USING ZRWA,R9
+         USING ZXVT,R11
+         MVC   ZRWASECT,SOMWTOD        ID
+         ZZTRC SOM=0,SWKEY=NO,MID=SOMWTOD,MOD=XPCWTO
+*
+**       Validity check message trigger
+*
+         MVC   DSARC,=AL4(RC8)         RC
+         MVC   ZXVTSOMT,DSAWTOBF       trace msg data
+         TM    ZXVTFLG2,ZXVT@CON       CON=YES?
+         BNZ   SOMW010                 yes
+         CLC   $HASP373,DSAWTOBF       JES2 msg?
+         BE    SOMW020                 yes
+         ZZTRC SOM=1,SWKEY=NO          trace
+         B     SOMWXIT                 exit
+*
+**       Check monitored messages trigger
+*
+SOMW010  DS    0H
+         CLC   SOM125I,DSAWTOBF        IEF125I?
+         BE    SOMW020                 yes
+         CLC   SOM403I,DSAWTOBF        IEF403I?
+         BE    SOMW020                 yes
+         ZZTRC SOM=2,SWKEY=NO          trace
+         B     SOMWXIT                 exit
+*
+**       Message trigger matched
+*
+SOMW020  DS    0H
+         XC    DSARC,DSARC             RC
+         ZZTRC SOM=3,SWKEY=NO          trace
+*
+SOMWXIT  DS    0H
+         L     R15,DSARC               RC
+         L     R0,DSARSN               RSN
+         L     R13,GPR@BWD(,R13)       caller savearea
+         LM    R1,R12,GPR@R1(R13)      restore regs
+         L     R14,GPR@R14(,R13)       return address
+         BR    R14                     return
+*---------------------------------------------------------------------*
+*        Constants/literals                                           *
+*--------+---------+---------+---------+---------+---------+---------+*
+         DS    0C
+SOM125I  DC    CL8'IEF125I'            SOM=trigger {TSU}
+SOM403I  DC    CL8'IEF403I'            SOM=trigger {JOB|STC}
+$HASP373 DC    CL9'$HASP373'           SOM=trigger (JOB|STC|TSU}
+         LTORG ,
+         DROP  ,
+*/********************************************************************/
+*/*                                                                  */
+*/* Name:        EOMWTO                                              */
+*/*                                                                  */
+*/* Function:    Validity check EOM message trigger routine          */
+*/*                                                                  */
+*/* Input Regs:  R6  WQE  address                                    */
+*/*              R7  SSCT address                                    */
+*/*              R8  SSOB address                                    */
+*/*              R9  ZRWA address                                    */
+*/*              R11 ZXVT address                                    */
+*/*              R12 DSA  address                                    */
+*/*              R13 Savearea address                                */
+*/*              R14 Return address                                  */
+*/*              R15 Entry address                                   */
+*/*                                                                  */
+*/* Regs Usage:  R6  WQE  address                                    */
+*/*              R9  ZRWA address                                    */
+*/*              R10 base address                                    */
+*/*              R11 ZXVT address                                    */
+*/*              R12 DSA  address                                    */
+*/*              R13 savearea address                                */
+*/*                                                                  */
+*/* Output Regs: R15 Return code                                     */
+*/*              R0  Reason code                                     */
+*/*                                                                  */
+*/********************************************************************/
+*/-------+---------+---------+---------+---------+---------+---------*/
+EOMWTO   DS    0H
+         USING DSA,R12
+         B     12(,R15)
+EOMWTOD  DC    CL8'EOMWTO'             ID
+         STM   R14,R12,GPR@R14(R13)    save callers regs
+         LR    R10,R15                 set base address
+         USING EOMWTO,R10              base addressability
+         LA    R1,DSASUBS              subroutine savearea
+         ST    R13,GPR@BWD(,R1)        chain,
+         ST    R1,GPR@FWD(,R13)        save,
+         LR    R13,R1                  areas.
+*
+**       Establish addressability
+*
+         USING WQE,R6
+         USING SSOB,R8
+         USING ZRWA,R9
+         USING ZXVT,R11
+         MVC   ZRWASECT,EOMWTOD        ID
+         ZZTRC EOM=R,SWKEY=NO,MID=EOMWTOD,MOD=XPCWTO
+*
+**       Validity check message trigger
+*
+         MVC   DSARC,=AL4(RC8)         RC
+         MVC   ZXVTEOMT,DSAWTOBF       trace msg data
+         TM    ZXVTFLG2,ZXVT@CON       CON=YES?
+         BNZ   EOMW010                 yes
+         CLC   $HASP395,DSAWTOBF       JES2 msg?
+         BE    EOMW020                 yes
+         ZZTRC EOM=S,SWKEY=NO          trace
+         B     EOMWXIT                 exit
+*
+**       Check monitored messages trigger
+*
+EOMW010  DS    0H
+         CLC   EOM125I,DSAWTOBF        IEF125I?
+         BE    EOMW020                 yes
+         CLC   EOM404I,DSAWTOBF        IEF404I?
+         BE    EOMW020                 yes
+         ZZTRC EOM=T,SWKEY=NO          trace
+         B     EOMWXIT                 exit
+*
+**       Message trigger matched
+*
+EOMW020  DS    0H
+         XC    DSARC,DSARC             RC
+         ZZTRC EOM=U,SWKEY=NO          trace
+*
+EOMWXIT  DS    0H
+         L     R15,DSARC               RC
+         L     R0,DSARSN               RSN
+         L     R13,GPR@BWD(,R13)       caller savearea
+         LM    R1,R12,GPR@R1(R13)      restore regs
+         L     R14,GPR@R14(,R13)       return address
+         BR    R14                     return
+*---------------------------------------------------------------------*
+*        Constants/literals                                           *
+*--------+---------+---------+---------+---------+---------+---------+*
+         DS    0C
+EOM125I  DC    CL8'IEF125I'            EOM=trigger {TSU}
+EOM404I  DC    CL8'IEF404I'            EOM=trigger {JOB|STC}
+$HASP395 DC    CL9'$HASP395'           EOM=trigger (JOB|STC|TSU}
+         LTORG ,
+         DROP  ,
+*---------------------------------------------------------------------*
+*        Dynamic Storage Area                                         *
+*--------+---------+---------+---------+---------+---------+---------+*
+DSA      DSECT ,
+DSASAVE  DS    18F                     savearea
+DSASBSA  DS    18F                     routine savearea
+DSASUBS  DS    18F                     subroutine savearea
+         DS    0X
+DSAFLG1  DS    XL1                     flags
+DSA@STAE EQU   X'80'                   recovery indicator
+DSA@RS11 EQU   X'40'                   -available
+DSA@RS12 EQU   X'20'                   -available
+DSA@RS13 EQU   X'10'                   -available
+DSA@RS14 EQU   X'08'                   -available
+DSA@RS15 EQU   X'04'                   -available
+DSA@RS16 EQU   X'02'                   -available
+DSA@RS17 EQU   X'01'                   -available
+         DS    0X
+DSAFLGX  DS    XL3                     -available
+         DS    0F
+DSAOPAR  DS    0F                      output parms
+DSARC    DS    F                       -R15 = RC
+DSARSN   DS    F                       -R0  = RSN
+DSAGR1   DS    F                       -R1  = output parm
+DSA@OPAL EQU   *-DSAOPAR               keep it in order
+         DS    0F
+DSACKEY  DS    F                       caller key
+DSASSOB  DS    F                       SSOB address
+DSATOKN  DS    F                       ESTAE token
+DSAREPLY DS    F                       WTOR binary reply ID
+DSASTOKN DS    XL8                     STOKEN
+DSAJOBNM DS    CL8                     jobname
+         DS    0F
+DSAESTAE DS    CL(ESTAEL)              ESTAE listform
+         DS    0F
+DSAZASY  DS    CL(ASY@SIZE)            ZASY entry
+         DS    0F
+DSAZASY2 DS    CL(ASY@SIZE)            ZASY entry
+         DS    0F
+DSAZASY3 DS    CL(ASY@SIZE)            ZASY entry
+         DS    0F
+DSAZXSA  DS    CL(XSA@SIZE)            ZXSA entry
+         DS    0F
+DSAZXSA2 DS    CL(XSA@SIZE)            XSA2 entry
+         DS    0F
+DSAWTOBF DS    CL112                   WQETXT text (112-chars max)
+DSAWTOBX DS    CL8                     WQETXT trailer
+DSA@WTOZ EQU   *-DSAWTOBF              WQETXT length
+         DS    0F
+DSAZRWA  DS    CL(ZRWA@SZE)            ZRWA recovery workarea
+DSAZRWAL EQU   *-DSAZRWA               ZRWA workarea size
+         DS    0C
+DSAEVENT DS    CL(XRE@DATA)            event data
+DSAESLCK DS    CL1                     slack byte
+         DS    0F
+DSAPLST  DS    XL256                   parmlist
+         DS    0D
+DSA@SIZE EQU   *-DSA                   size of DSA
+*---------------------------------------------------------------------*
+*        Server data areas                                            *
+*--------+---------+---------+---------+---------+---------+---------+*
+         PRINT NOGEN
+         ZZXVT ,
+         ZZXSA ,
+         ZZASY ,
+         ZZXRE ,
+         ZZRWA ,
+         ZZEQU ,
+         ZZTAB GEN=MSG,DSECT=YES
+         ZZMAC GEN=MID,ID=XID,DSECT=YES
+*---------------------------------------------------------------------*
+*        System data areas                                            *
+*--------+---------+---------+---------+---------+---------+---------+*
+         PRINT NOGEN
+         IHAPSA ,
+         IHAASCB ,
+         IHAASXB ,
+         IHAASSB ,
+         IKJTCB DSECT=YES
+         IKJRB DSECT=YES
+         CVT   DSECT=YES
+         IHAWQE ,
+         IEFJESCT ,
+         IEFJSCVT ,
+         IEFJSSVT ,
+         IEFJSSIB ,
+         IEFJSSOB (WT),CONTIG=NO
+         IEFENFSG ,
+ENSG@SZE EQU *-ENSG
+         END

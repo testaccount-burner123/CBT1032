@@ -1,0 +1,165 @@
+         MACRO
+*/*******************************************************************/
+*/*                                                                 */
+*/* Name:        ZRWA                                               */
+*/*                                                                 */
+*/* Description: ZXPC server recovery workarea                      */
+*/*                                                                 */
+*/* Function:    Contains data about the original error and         */
+*/*              also concerning actions of previously entered      */
+*/*              recovery routine.                                  */
+*/*                                                                 */
+*/*******************************************************************/
+*--------+---------+---------+---------+---------+---------+--------+*
+*                                                                    *
+* ID    Rel    Date       Author        Comments                     *
+*--------------------------------------------------------------------*
+* @01 | V1R1 | 12072021 | Ben Marino  | Initial version              *
+*     |      |          |             |                              *
+*     |      |          |             |                              *
+**********************************************************************
+*--------+---------+---------+---------+---------+---------+--------+*
+         ZZRWA ,
+ZRWA     DSECT ,
+ZRWAID   DS    CL4'ZRWA'               ID
+ZRWAFLG1 DS    XL1                     flags
+ZRWA@PER EQU   X'80'                   ABEND recursion indicator
+ZRWA@AOK EQU   X'40'                   retry successful indicator
+ZRWA@NDP EQU   X'20'                   SDUMP=NO indicator
+ZRWA@NWT EQU   X'10'                   WTO=NO indicator
+ZRWA@LOG EQU   X'08'                   LOGREC{NO|YES} indicator
+ZRWA@1R5 EQU   X'04'                   -available
+ZRWA@1R6 EQU   X'02'                   -available
+ZRWA@1R7 EQU   X'01'                   -available
+         DS    0X
+ZRWAWORK DS    XL1                     work flags
+ZRWA@WTI EQU   X'80'                   WTO issued
+ZRWA@SDI EQU   X'40'                   SDUMP issued
+ZRWA@RV2 EQU   X'20'                   -available
+ZRWA@RV3 EQU   X'10'                   -available
+ZRWA@RV4 EQU   X'08'                   -available
+ZRWA@RV5 EQU   X'04'                   -available
+ZRWA@RV6 EQU   X'02'                   -available
+ZRWA@RV7 EQU   X'01'                   -available
+         DS    0X
+ZRWAILC  DS    XL1                     SDWAILC2 - Instruction Length
+ZRWAIC   DS    XL1                     SDWAICD2 - interrupt code
+ZRWATEA  DS    A                       SDWATRN2 - translation address
+         DS    0X
+ZRWAAPSW DS    0XL8                    SDWAEC2  - ABEND PSW
+ZRWAPSW0 DS    A                       -PSW+0
+ZRWAPSW4 DS    A                       -PSW+4
+ZRWAPSWZ EQU   *-ZRWAAPSW              keep it togeter
+         DS    0A
+ZRWARTRY DS    A                       retry address
+ZRWAZXVT DS    A                       ZXVT address
+ZRWARSVS DS    A                       -available
+ZRWARSVW DS    A                       -available
+         DS    0F
+ZRWASUBN DS    CL4                     subsys(server) name
+ZRWASDRC DS    XL4                     SDUMP return code
+ZRWABEND DS    XL4                     ABEND code
+ZRWARSN  DS    XL4                     ABEND reason code
+ZRWACONV DS    XL8                     general workarea
+         DS    0X
+ZRWACODE DS    0CL8                    ABEND hex code
+ZRWAHBIT DS    CL1                     -byte one
+ZRWATYPE DS    CL1                     -system(S), user(U)
+ZRWASYS  DS    CL3                     -system ABEND
+ZRWAUSER DS    CL3                     -user ABEND
+ZRWACODL EQU   *-ZRWACODE              keep it together
+         DS    0F
+ZRWASAVE DS    18F                     XPCRTM save area
+ZRWA@CLR EQU   *-ZRWA                  ZRWA scrub size
+*
+**       RETRY ARs/GPRs
+*
+ZRWAARS  DS    XL64                    Retry ARs
+ZRWAGPRS DS    XL64                    Retry GPRs
+ZRWAHGRS DS    XL64                    Retry high GPRs
+*
+**       RECPARM recovery data
+*
+ZRWARECP DS    0CL24                   RECPARM
+ZRWALMOD DS    CL8                     LMOD
+ZRWASECT DS    CL8                     CSECT
+ZRWARECR DS    CL8                     recovery routine
+ZRWARECL EQU   *-ZRWARECP              RECPARM size
+*
+**       WTO Error Message
+*
+ZRWAW    DS    0F
+ZRWAWTO  DS    0CL70                   WTO listform
+         DS    XL4                     -textlen+MCS+MSGID
+ZRWAWMID DS    CL7                     -msg ID
+         DS    CL1
+ZRWAWSUB DS    CL4                     -subsystem name
+         DS    CL15                    -msg text
+ZRWAWMOD DS    CL8                     -ABENDing module name
+         DS    CL7
+ZRWAWTYP DS    CL1                     -system(S); user(U)
+ZRWAWCOD DS    CL3                     -system/user ABEND code
+         DS    CL5
+ZRWAWRSN DS    CL8                     -ABEND reason code
+ZRWADESC DS    XL4                     -DESC+ROUT codes
+         DS    CL3
+ZRWAWTOL EQU   *-ZRWAWTO               WTO listform
+*
+**       SDUMP Title Workarea
+*
+ZRWAD    DS    0F
+ZRWADUMP DS    0CL84                   SDUMP listform
+         DS    XL4                     -flags
+         DS    AL4                     -DCB address
+         DS    AL4                     -storage list
+ZRWADATA DS    AL4                     -title length byte addr
+         DS    AL4                     -DCB address
+         DS    AL4                     -curent/other ASIDs
+         DS    AL4                     -ASIDLIST address
+         DS    AL4                     -SUMLIST address
+         DS    AL4                     -reserved
+         DS    AL4                     -reserved
+ZRWADUSR DS    CL1                     -text length
+ZRWADSUB DS    CL4                     -subsystem name
+         DS    CL15                    -title text
+ZRWADMOD DS    CL8                     -ABENDing module name
+         DS    CL1                     -title text
+ZRWADCOD DS    CL4                     -ABEND code
+         DS    CL1                     -title text
+ZRWADRSN DS    CL8                     -RSN code
+ZRWADMPL EQU   *-ZRWADUMP              SDUMP listform
+         DS    0D
+ZRWA@SZE EQU   *-ZRWA                  ZRWA size
+ZRWA@MAX DS    0XL(512-ZRWA@SZE+1)     ZRWA size restriction
+*/*******************************************************************/
+*/*                                                                 */
+*/* Name: ZFRR                                                      */
+*/*                                                                 */
+*/* Description: ZXPC subsystem server recovery workarea            */
+*/*                                                                 */
+*/* Notes: None                                                     */
+*/*                                                                 */
+*/*******************************************************************/
+*--------+---------+---------+---------+---------+---------+--------+*
+FRR      DSECT ,
+FRRID    DS    CL4'ZFRR'               ID
+FRRFLG1  DS    XL1                     flags
+FRR@RECR EQU   X'80'                   recursion indicator
+FRR@PICC EQU   X'40'                   program check indicator
+FRR@DUMP EQU   X'20'                   SDUMP required indicator
+FRR@LOGR EQU   X'10'                   LOGREC required indicator
+FRR@EXIT EQU   X'08'                   process exit indicator
+FRR@LOCL EQU   X'04'                   LOCAL lock held indicator
+FRR@RSV6 EQU   X'02'                   -available
+FRR@RSV7 EQU   X'01'                   -available
+         DS    0X
+FRRXRC   DS    XL1                     program check RC
+FRRSVRZ  DS    XL2                     -available
+         DS    0F
+FRRZXVT  DS    A                       ZXVT address
+FRRZRWA  DS    A                       ZRWA address
+FRRZASY  DS    A                       ZASY address
+FRRSRBA  DS    A                       SRB element address
+FRR@SZE  EQU   *-FRR
+FRR@MAX  DS    0XL(24-FRR@SZE+1)       SETFRR macro restriction
+         MEND  ,

@@ -1,0 +1,1683 @@
+         MACRO
+.*/*******************************************************************/
+.*/*                                                                 */
+.*/* NAME:                                                           */
+.*/*  ZLISTEN                                                        */
+.*/*                                                                 */
+.*/* FUNCTION:                                                       */
+.*/*  System events listener facility schedule macro                 */
+.*/*                                                                 */
+.*/* DESCRIPTION:                                                    */
+.*/*  Defines a listener routine and associates it with a system     */
+.*/*  event. By default, the listener routine executes under the     */
+.*/*  TCB where the event triggers. Optionally, the listener routine */
+.*/*  can execute asynchrobously, under any TCB of the same address  */
+.*/*  space, under any TCB of a different address space, or in local */
+.*/*  SRB-mode of the same or different address space.               */
+.*/*                                                                 */
+.*/* ENVIRONMENT:                                                    */
+.*/*  TCB-mode                                                       */
+.*/*                                                                 */
+.*/* REQUIREMENTS:                                                   */
+.*/*  The ZLISTEN caller must include the ZZXRE mapping macro.       */
+.*/*                                                                 */
+.*/* SECURITY:                                                       */
+.*/*  When SAF=NOCALL is specified, security checks are bypassed.    */
+.*/*  When SAF=XPCCLASS is specified, the caller must have READ      */
+.*/*  authority to profile ZXPC.API.AUTH in resource class XPCCLASS. */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/* ------------------- P A R A M E T E R S ----------------------- */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* EP=                                                             */
+.*/* LMOD=                                                           */
+.*/*  Required and mutually exclusive parameters. Specifies the      */
+.*/*  listener routine entry address (EP=), or address of module     */
+.*/*  name (LMOD=) that will be given control when the system event  */
+.*/*  is triggered. When EP= is specifid, the listener routine must  */
+.*/*  be addressable by the address space where the listener routine */
+.*/*  will execute. To code, specify the RS-type address, or address */
+.*/*  in register (2)-(12).                                          */
+.*/*                                                                 */
+.*/*  Note: To make sure your listener routine is addressable to     */
+.*/*        all address spaces, you can use the ZXPC ZDYNLPA ADD     */
+.*/*        service request to loaded into the dynamic-LPA.          */
+.*/*                                                                 */
+.*/*  When LMOD= is specified, the listener routine is loaded at     */
+.*/*  execution time via the LOAD SVC, in the address space where    */
+.*/*  the listener routine will execute. To code, specify the RS-    */
+.*/*  type address, or address in register (2)-(12).                 */
+.*/*                                                                 */
+.*/*  Note: LMOD= is mutually exclusive with parameter EXEC=SRB.     */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* PARM=                                                           */
+.*/*  An optional parameter. Specifies a parameter fullword that     */
+.*/*  is passed to the event listener routine. To code, specify      */
+.*/*  the RS-type address of the parameter fullword, or parameter    */
+.*/*  fullword in register (2)-(12).                                 */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* KEY={0|8}                                                       */
+.*/*  An optional parameter. Specifies the listener routine PSW key. */
+.*/*  If not specified, the listener routine executes in keu 8.      */
+.*/*                                                                 */
+.*/*  Note: To protect MVS integrity, KEY=0 is only allowed when     */
+.*/*        initialization option SUP=YES is in effect. When the     */
+.*/*        option is set to SUP=NO, the default, the ZLISTEN        */
+.*/*        request fails with RC=08 and RSN=148.                    */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* MODE={SUP|PROB}                                                 */
+.*/*  An optional parameter. Specifies the listener routine execution*/
+.*/*  state. If not specified, the routine executes in problem state.*/
+.*/*                                                                 */
+.*/*  Note: To protect MVS integrity, MODE=SUP is only allowed when  */
+.*/*        initialization option SUP=YES is in effect. When the     */
+.*/*        option is set to SUP=NO, the default, the ZLISTEN        */
+.*/*        request fails with RC=08 and RSN=152.                    */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* EXEC={TCB|SRB}                                                  */
+.*/*  An optional parameter. Specifies the listener routine          */
+.*/*  execution mode. If not specified, the default is EXEC=TCB.     */
+.*/*                                                                 */
+.*/*  When EXEC=TCB is specified, or defaulted to, the event         */
+.*/*  listener routine receives control as follows:                  */
+.*/*                                                                 */
+.*/*   - Primary ASC-mode                                            */
+.*/*   - Problem state                                               */
+.*/*   - key 8                                                       */
+.*/*   - R0  = System event data address mapped by macro ZZASY       */
+.*/*   - R1  = Listener routine PARM= parameter value                */
+.*/*   - R13 = Address of a standard 18-word savearea                */
+.*/*   - R14 = ZXPC server return address                            */
+.*/*   - R15 = Listener routine entry address                        */
+.*/*                                                                 */
+.*/*  The event listener routine must return as follows:             */
+.*/*                                                                 */
+.*/*   - Primary ASC-mode                                            */
+.*/*   - Problem state                                               */
+.*/*   - key 8                                                       */
+.*/*   - Restore the contents of R14 thru R12                        */
+.*/*   - Return on register R14                                      */
+.*/*                                                                 */
+.*/*  When EXEC=SRB is spacified, the listener routine runs in SRB-  */
+.*/*  mode. You can only specify the EP= parameter, since the LMOD=  */
+.*/*  parameter is not allowed with EXEC=SRB.                        */
+.*/*                                                                 */
+.*/*  To protect MVS integrity, EXEC=SRB is only allowed when option */
+.*/*  SUP=YES is in effect. When the option is set to SUP=NO, the    */
+.*/*  default, the ZLISTEN request fails with RC=08 and RSN=144.     */
+.*/*                                                                 */
+.*/*  In SRB-mode, the event listener routines receives control      */
+.*/*  as follows:                                                    */
+.*/*                                                                 */
+.*/*   - Primary ASC-mode                                            */
+.*/*   - Supervisor state                                            */
+.*/*   - key 0                                                       */
+.*/*   - LOCAL lock held and MUST NOT be released                    */
+.*/*   - R0  = System event data address mapped by macro ZZASY       */
+.*/*   - R1  = Listener routine PARM= parameter value                */
+.*/*   - R13 = Address of a standard 18-word savearea                */
+.*/*   - R14 = ZXPC server return address                            */
+.*/*   - R15 = Listener routine entry point address                  */
+.*/*                                                                 */
+.*/*  The event listener routine must return as follows:             */
+.*/*                                                                 */
+.*/*   - Primary ASC-mode                                            */
+.*/*   - Supervisor state                                            */
+.*/*   - key 0                                                       */
+.*/*   - LOCAL lock held                                             */
+.*/*   - Restore the contents of R14 thru R12                        */
+.*/*   - Return on register R14                                      */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* PERSIST={NO|EOT|EOM|IPL}                                        */
+.*/*  An optional parameter. Specifies listener routine persistance. */
+.*/*  If not specified, the default is PERSIST=NO. The following     */
+.*/*  options are supported:                                         */
+.*/*                                                                 */
+.*/*  NO  Listener persists for the life of a single system event.   */
+.*/*  EOT Listener persists for the life of the issuer task.         */
+.*/*  EOM Listener persists for the life of the issuer address space.*/
+.*/*  IPL Listener persists for the life of the IPL.                 */
+.*/*                                                                 */
+.*/*  To delete a defined listener routine from the system events    */
+.*/*  listening queue, issue ZLISTEM with the DELETE=token parameter.*/
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* DELETE=token                                                    */
+.*/*  An optional parameter. To delete a listener routine from the   */
+.*/*  system events listening queue, issue delete with the 4-byte    */
+.*/*  token value that was returned in register 1 when the system    */
+.*/*  event listener routine was defined.                            */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* ABTERM={NO|YES}}                                                */
+.*/*  An optional parameter. Specifies how to react if the listener  */
+.*/*  routine abnormally terminates. ABTERM=NO, the default, does    */
+.*/*  not percolate the ABEND to the issuer of the ZLISTEN request.  */
+.*/*  ABTERM=YES, percolates the ABEND to the ZLISTEN caller.        */
+.*/*  The default is ABTERM=NO.                                      */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* SOM=*                                                           */
+.*/* SOMJOB=                                                         */
+.*/* SOMSTC=                                                         */
+.*/* SOMTSU=                                                         */
+.*/*  Optional and mutually exclusive parameters. Specifies the      */
+.*/*  start of memory (SOM) system event that will be used to        */
+.*/*  trigger the listener routine.                                  */
+.*/*                                                                 */
+.*/*  If you want the system event to trigger the listener routine   */
+.*/*  when any address space in the system starts, code SOM=*.       */
+.*/*                                                                 */
+.*/*  If you want to use JOB name (SOMJOB=) as a trigger, specify    */
+.*/*  the address of the 8-byte name in a register, or the RS-type   */
+.*/*  address of the 8-byte name.                                    */
+.*/*                                                                 */
+.*/*  If you want to use STC name (SOMSTC=) as a trigger, specify    */
+.*/*  the address of the 8-byte name in a register, or the RS-type   */
+.*/*  address of the 8-byte name.                                    */
+.*/*                                                                 */
+.*/*  If you want to use TSU name (SOMTSU=) as a trigger, specify    */
+.*/*  the address of the 8-byte name in a register, or the RS-type   */
+.*/*  address of the 8-byte name.                                    */
+.*/*                                                                 */
+.*/*  Note 1: Parameters SOMJOB=, SOMSTC= and SOMTSU= allow you to   */
+.*/*          code generic "*" jobname characters.                   */
+.*/*                                                                 */
+.*/*  Note 2: Parameters JOB=, STC=, TSU=, ASCB=, STOKEN= are not    */
+.*/*          allowed. If specified, they are ignored.               */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* EOM=*                                                           */
+.*/* EOMJOB=                                                         */
+.*/* EOMSTC=                                                         */
+.*/* EOMTSU=                                                         */
+.*/*  Optional and mutually exclusive parameters. Specifies the end  */
+.*/*  of memory (EOM) system event that will be used to trigger the  */
+.*/*  listener routine.                                              */
+.*/*                                                                 */
+.*/*  If you want the system event to trigger the listener routine   */
+.*/*  when any address space in the system terminates, code EOM=*.   */
+.*/*                                                                 */
+.*/*  If you want to use JOB name (EOMJOB=) as a trigger, specify    */
+.*/*  the address of the 8-byte name in a register, or the RS-type   */
+.*/*  address of the 8-byte name.                                    */
+.*/*                                                                 */
+.*/*  If you want to use STC name (EOMSTC=) as a trigger, specify    */
+.*/*  the address of the 8-byte name in a register, or the RS-type   */
+.*/*  address of the 8-byte name.                                    */
+.*/*                                                                 */
+.*/*  If you want to use TSU name (EOMTSU=) as a trigger, specify    */
+.*/*  the address of the 8-byte name in a register, or the RS-type   */
+.*/*  address of the 8-byte name.                                    */
+.*/*                                                                 */
+.*/*  Note 1: Parameters EOMJOB=, EOMSTC= and EOMTSU= allow you to   */
+.*/*          code generic "*" jobname characters.                   */
+.*/*                                                                 */
+.*/*  Note 2: Parameters JOB=, STC=, TSU=, ASCB=, STOKEN= are not    */
+.*/*          allowed. If specified, they are ignored.               */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* CMD=*                                                           */
+.*/* CMD=command                                                     */
+.*/*  An optional parameter. Specifies the command that triggers the */
+.*/*  listener routine. To code, specify the RS-type address of a    */
+.*/*  72-character command string, or address of command string in   */
+.*/*  register (2)-(12).                                             */
+.*/*                                                                 */
+.*/* ALIAS=*                                                         */
+.*/* ALIAS=command-alias                                             */
+.*/*  An optional parameter. Specifies the command alias name that   */
+.*/*  triggers the listener routine. To code, specify the RS-type    */
+.*/*  address of a 72-character command alias string, or address of  */
+.*/*  command alias string in register (2)-(12).                     */
+.*/*                                                                 */
+.*/*  If you want the system event to trigger the listener routine   */
+.*/*  when any command is issued in the system, code CMD=* and if    */
+.*/*  the command has an alias name, code ALIAS=*.                   */
+.*/*                                                                 */
+.*/*  If you want the listener routine to listen for commands issued */
+.*/*  by tasks in a specific address space only, code the address    */
+.*/*  space STOKEN=, JOB=, STC= or TSU= parameter.                   */
+.*/*                                                                 */
+.*/*  Note: Parameters JOB=, STC=, and TSU= allow you to code        */
+.*/*        generic "*" jobname characters.                          */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* WTO=message                                                     */
+.*/*  An optional parameter. Specifies the message that will trigger */
+.*/*  the listener routine. To code, specify the RS-type address of  */
+.*/*  a 72-character message string, or address of message string in */
+.*/*  register (2)-(12).                                             */
+.*/*                                                                 */
+.*/*  If you want the listener routine to listen for messages issued */
+.*/*  by tasks in a specific address space only, code the target     */
+.*/*  address space STOKEN=, JOB=, STC= or TSU= parameter.           */
+.*/*                                                                 */
+.*/*  Note: Parameters JOB=, STC=, and TSU= allow you to code        */
+.*/*        generic "*" jobname characters.                          */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* ENF=code                                                        */
+.*/*  An optional parameter. Specifies the MVS Event Notification    */
+.*/*  Facility decimal event code, which when signaled by ENF, the   */
+.*/*  ZXPC server will trigger your listener routine.                */
+.*/*                                                                 */
+.*/*  See z/OS MVS Programming: Authorized Assembler Services guide  */
+.*/*  for a description of ENF event codes and meanings.             */
+.*/*                                                                 */
+.*/*  By default, your listener routine executes under the task TCB  */
+.*/*  and address space where the event triggered.                   */
+.*/*                                                                 */
+.*/*  If you want your listener routine to execute in SRB-mode in    */
+.*/*  the address space where the event triggered, code the EXEC=SRB */
+.*/*  parameter.                                                     */
+.*/*                                                                 */
+.*/*  If you want your listener routine to execute in a different    */
+.*/*  address space, in SRB-mode or TCB-mode, code the XJOB=, XSTC=, */
+.*/*  XTSU=, XASCB=, XSTOKEN= parameter.                             */
+.*/*                                                                 */
+.*/*  Note: Parameters JOB=, STC=, TSU=, ASCB=, STOKEN=, are not     */
+.*/*        allowed. If specified, they are ignored.                 */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* XCF={*|msgID}                                                   */
+.*/*  An optional parameter. Specifies the Cross-system Coupling     */
+.*/*  facility message, which when issued by XCF, the ZXPC server    */
+.*/*  will trigger your listenere routine. You can specify the       */
+.*/*  following:                                                     */
+.*/*                                                                 */
+.*/*  XCF=*     - trigger the listener routine for all XCF issued    */
+.*/*              messages.                                          */
+.*/*  XCF=msgID - trigger the listener routine when a message that   */
+.*/*              matches the specified msgID is issued.             */
+.*/*                                                                 */
+.*/*  Note: You can specify msgID generic"*" characters.             */
+.*/*        For example, if you want your listener routine to        */
+.*/*        trigger when any XCF action "A" message is issued,       */
+.*/*        code: XCF=IXC***A.                                       */
+.*/*                                                                 */
+.*/*  If you want your listener routine to execute in a different    */
+.*/*  address space, in SRB-mode or TCB-mode, code the XJOB=, XSTC=, */
+.*/*  XTSU=, XASCB=, XSTOKEN= parameter.                             */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* JOB=                                                            */
+.*/* STC=                                                            */
+.*/* TSU=                                                            */
+.*/* ASCB=                                                           */
+.*/* STOKEN=                                                         */
+.*/*  Optional and mutually exclusive parameters. Specifying one     */
+.*/*  of these parameters means that the listener routine will only  */
+.*/*  execute when the system event triggers in the selected address */
+.*/*  space. If not specified, the listener routine executes for all */
+.*/*  system events that occur in the selected address space.        */
+.*/*                                                                 */
+.*/*  If you want to use the JOBname (JOB=) as a trigger, specify    */
+.*/*  the address of the 8-byte name in a register, or the RS-type   */
+.*/*  address of the 8-byte name.                                    */
+.*/*                                                                 */
+.*/*  If you want to use the STCname (STC=) as a trigger, specify    */
+.*/*  the address of the 8-byte name in a register, or the RS-type   */
+.*/*  address of the 8-byte name.                                    */
+.*/*                                                                 */
+.*/*  If you want to use the TSUname (TSU=) as a trigger, specify    */
+.*/*  the address of the 8-byte name in a register, or the RS-type   */
+.*/*  address of the 8-byte name.                                    */
+.*/*                                                                 */
+.*/*  Note: Parameters JOB=, STC= and TSU= allows yo to code generic */
+.*/*        "*" jobname characters.                                  */
+.*/*                                                                 */
+.*/*  If you want to use the ASCB address (ASCB=) as a trigger,      */
+.*/*  specify the address of the ASCB in a register or RS-type       */
+.*/*  address of a fullword that contains the ASCB address.          */
+.*/*                                                                 */
+.*/*  If you want to use the address space (STOKEN=) as a trigger,   */
+.*/*  specify the address of the 8-byte token name in a register,    */
+.*/*  or RS-type address of the 8-byte token name.                   */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* XJOB=                                                           */
+.*/* XSTC=                                                           */
+.*/* XTSU=                                                           */
+.*/* XTCB=                                                           */
+.*/* XASCB=                                                          */
+.*/* XSTOKEN=                                                        */
+.*/* XTTOKEN=                                                        */
+.*/*  Optional and mutually exclusive parameters. Use one of these   */
+.*/*  parameters to specify under what task and in which address     */
+.*/*  space, your listener routine, when triggered, will execute.    */
+.*/*  If not specified, the listener routine executes under the      */
+.*/*  same task and in the same address space where the system event */
+.*/*  triggered.                                                     */
+.*/*                                                                 */
+.*/*  If you want to use the JOB name (XJOB=) to specify where the   */
+.*/*  listener routine will execute, code the address of the 8-byte  */
+.*/*  name in a register, or the RS-type address of the 8-byte name. */
+.*/*                                                                 */
+.*/*  If you want to use the STC name (XSTC=) to specify where the   */
+.*/*  listener routine will execute, code the address of the 8-byte  */
+.*/*  name in a register, or the RS-type address of the 8-byte name. */
+.*/*                                                                 */
+.*/*  If you want to use the TSU name (XTSU=) to specify where the   */
+.*/*  listener routine will execute, code the address of the 8-byte  */
+.*/*  name in a register, or the RS-type address of the 8-byte name. */
+.*/*                                                                 */
+.*/*  Note: Parameters XJOB=, XSTC= and XTSU= DONOT allow you to     */
+.*/*        code generic "*" jobname characters.                     */
+.*/*                                                                 */
+.*/*  If you want to use the TCB address (XTCB=) to specifiy where   */
+.*/*  the listener routine will execute, pass the address of the     */
+.*/*  TCB in a register, or the RS-type address of a fullword that   */
+.*/*  contains the TCB address.                                      */
+.*/*                                                                 */
+.*/*  If you want to use the ASCB address (XASCB=) to specify where  */
+.*/*  the listener routine will execute, pass the address of the     */
+.*/*  ASCB in a register, or the RS-type address of a fuulword that .*/
+.*/*  contains the ASCB address.                                     */
+.*/*                                                                 */
+.*/*  If you want to use the address space token (XSTOKEN=) to       */
+.*/*  specify where the listener routine will execute, code the      */
+.*/*  address of the 8-byte address space token in a register, or    */
+.*/*  the RS-type address of the 8-byte address space token.         */
+.*/*                                                                 */
+.*/*  If you want to use the TCB token (XTOKEN=) to specify under    */
+.*/*  which task the listener routine will execute, in IRB-mode,     */
+.*/*  code the address of the 16-byte TCB token in a register, or    */
+.*/*  RS-type address of the 16-byte TCB token.                      */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* MF={E|L}                                                        */
+.*/*  MF=E specifies the address of the ZLISTEN MF=L listform.       */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/* ------------------ R E T U R N  C O D E S --------------------- */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* R15:                                                            */
+.*/*  0 - Listener routine successfully scheduled                    */
+.*/*  4 - ENFREQ ACTION=LISTEN duplicate exit EP detected            */
+.*/*  8 - Listener routine schedule failed                           */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/* ------------------ R E A S O N  C O D E S --------------------- */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* R0:                                                             */
+.*/*    0 - Listener routine successfully scheduled                  */
+.*/*  112 - ZXRE system event queue failed validity checks           */
+.*/*  120 - ZXRE element failed validity checks                      */
+.*/*  124 - ZXRE element cell obtain failed                          */
+.*/*  128 - TCBTOKEN service request failed                          */
+.*/*  132 - Listener routine define failed                           */
+.*/*  136 - Invalid system event type specified                      */
+.*/*  140 - ZLISTEN terminated abnormally                            */
+.*/*  144 - ZLISTEN EXEC=SRB only allowed when SUP=YES is specified  */
+.*/*  148 - ZLISTEN KEY=0 only allowed with SUP=YES is specified     */
+.*/*  152 - ZLISTEN MODE=SUP only allowed when SUP=YES is specified  */
+.*/*  156 - ZLISTEN ENFREQ ACTION=LISTEN returned non-zero RC        */
+.*/*  160 - ZLISTEN Unable to locate ZXPC server ZXVT table          */
+.*/*  164 - ZLISTEN ENFREQ ACTION=LISTEN duplicate event code (RC=4) */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/* --------------------- E X A M P L E S ------------------------- */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* EXAMPLE 1:                                                      */
+.*/*                                                                 */
+.*/*  Define a listener routine that triggers when a job, started    */
+.*/*  task or TSO user begins execution. The listener routine runs   */
+.*/*  under the address space jobstep task TCB.                      */
+.*/*                                                                 */
+.*/*  ZLISTEN  SOM=*,EP=(2),PARM=(3),MF=(E,PLIST)                    */
+.*/*           LTR   R15,R15                                         */
+.*/*           BNZ   ERROR                                           */
+.*/*           ST    R1,LTOKEN   returned delete token               */
+.*/*                                                                 */
+.*/*  LTOKEN   DS  F                                                 */
+.*/*  PLIST    ZLISTEN MF=L      listform                            */
+.*/*           ZZXRE ,           include ZZXRE mapping macro         */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* EXAMPLE 2:                                                      */
+.*/*                                                                 */
+.*/*  Define a listener routine that triggers when started task,     */
+.*/*  SMFDAILY, begins execution. The listener routine runs under    */
+.*/*  the SMFDAILY jobstep task TCB.                                 */
+.*/*                                                                 */
+.*/*  ZLISTEN  SOMSTC=MYSTC,EP=(2),PARM=(3),MF=(E,PLIST)             */
+.*/*           LTR   R15,R15                                         */
+.*/*           BNZ   ERROR                                           */
+.*/*           ST    R1,LTOKEN   returned delete token               */
+.*/*                                                                 */
+.*/*  LTOKEN   DS  F                                                 */
+.*/*  MYSTC    DC  CL8'SMFDAILY' started task name                   */
+.*/*  PLIST    ZLISTEN MF=L      listform                            */
+.*/*           ZZXRE ,           include ZZXRE mapping macro         */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* EXAMPLE 3:                                                      */
+.*/*                                                                 */
+.*/*  Define a listener routine that triggers when job, REPORT1,     */
+.*/*  begins execution. The listener routine runs under the jobstep  */
+.*/*  task TCB of the MONEXC started task address space.             */
+.*/*                                                                 */
+.*/*  ZLISTEN  SOMJOB=MYJOB,XSTC=XSTC,EP=(2),PARM=(3),MF=(E,PLIST)   */
+.*/*           LTR   R15,R15                                         */
+.*/*           BNZ   ERROR                                           */
+.*/*           ST    R1,LTOKEN   returned delete token               */
+.*/*                                                                 */
+.*/*  LTOKEN   DS  F                                                 */
+.*/*  MYJOB    DC  CL8'REPORT1'  job name                            */
+.*/*  XSTC     DC  CL8'MONEXC'   job name                            */
+.*/*  PLIST    ZLISTEN MF=L      listform                            */
+.*/*           ZZXRE ,           include ZZXRE mapping macro         */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* EXAMPLE 4:                                                      */
+.*/*                                                                 */
+.*/*  Define a listener routine that triggers when ANY address space */
+.*/*  in the system normally or abnormally terminates. The listener  */
+.*/*  routine executes under the initiator (IEFSD060) jobstep task   */
+.*/*  TCB of the terminating address space.                          */
+.*/*                                                                 */
+.*/*  ZLISTEN  EOM=*,EP=(2),PARM=(3),MF=(E,PLIST)                    */
+.*/*           LTR   R15,R15                                         */
+.*/*           BNZ   ERROR                                           */
+.*/*           ST    R1,LTOKEN   returned delete token               */
+.*/*                                                                 */
+.*/*  LTOKEN   DS  F                                                 */
+.*/*  PLIST    ZLISTEN MF=L      listform                            */
+.*/*           ZZXRE ,           include ZZXRE mapping macro         */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* EXAMPLE 5:                                                      */
+.*/*                                                                 */
+.*/*  Define a listener routine that triggers when the started task  */
+.*/*  designated by MYSTC normally or abnormally terminates. The     */
+.*/*  listener routine runs in IRB-mode under the TCB designated by  */
+.*/*  TCB token TCBTKN, in address space designaded by address space */
+.*/*  token ASCBTKN.                                                 */
+.*/*                                                                 */
+.*/*  ZLISTEN  EOMSTC=MYSTC,EP=(2),PARM=(3),                         */
+.*/*           XTTOKEN=TCBTKN,XSTOKEN=ASCBTKN,MF=(E,PLIST)           */
+.*/*           MF=(E,PLIST)                                          */
+.*/*           LTR   R15,R15                                         */
+.*/*           BNZ   ERROR                                           */
+.*/*           ST    R1,LTOKEN   returned delete token               */
+.*/*                                                                 */
+.*/*  LTOKEN   DS    F                                               */
+.*/*  MYSTC    DC    CL8'ZECF'   STC where system event triggers     */
+.*/*  ASCBTKN  DS    XL8         listerer runs in this address space */
+.*/*  TCBTKN   DS    XL16        listener runs under this task       */
+.*/*  PLIST    ZLISTEN MF=L      listform                            */
+.*/*           ZZXRE ,           include ZZXRE mapping macro         */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* EXAMPLE 6:                                                      */
+.*/*                                                                 */
+.*/*  Define a listener routine that triggers when JES2 normally     */
+.*/*  or abnormallt terminates. The listener routine executes under  */
+.*/*  the initiator (IEFSD060) jobstep task TCB of the JES2 address  */
+.*/*  space.                                                         */
+.*/*                                                                 */
+.*/*  ZLISTEN  EOMSTC=JES2,EP=(2),PARM=(3),MF=(E,PLIST)              */
+.*/*           LTR   R15,R15                                         */
+.*/*           BNZ   ERROR                                           */
+.*/*           ST    R1,LTOKEN   returned delete token               */
+.*/*                                                                 */
+.*/*  LTOKEN   DS    F                                               */
+.*/*  JES2     DC    CL8'JES2'   where event triggers                */
+.*/*  PLIST    ZLISTEN MF=L      listform                            */
+.*/*           ZZXRE ,           include ZZXRE mapping macro         */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* EXAMPLE 7:                                                      */
+.*/*                                                                 */
+.*/*  Define a listener routine that triggers when job, REPORT1,     */
+.*/*  normally or abnormally terminates. the listener routine runs   */
+.*/*  under the jobstep task TCB of the MONEXC started task address  */
+.*/*  space.                                                         */
+.*/*                                                                 */
+.*/*  ZLISTEN  EOMJOB=MYJOB,XSTC=XSTC,EP=(2),PARM=(3),MF=(E,PLIST)   */
+.*/*           LTR   R15,R15                                         */
+.*/*           BNZ   ERROR                                           */
+.*/*           ST    R1,LTOKEN   returned delete token               */
+.*/*                                                                 */
+.*/*  LTOKEN   DS  F                                                 */
+.*/*  MYJOB    DC  CL8'REPORT1'  job name                            */
+.*/*  XSTC     DC  CL8'MONEXC'   job name                            */
+.*/*  PLIST    ZLISTEN MF=L      listform                            */
+.*/*           ZZXRE ,           include ZZXRE mapping macro         */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* EXAMPLE 8:                                                      */
+.*/*                                                                 */
+.*/*  Define a listener routine that triggers when the STOP TSO      */
+.*/*  command is issued. The listener routine executes synchronously */
+.*/*  in SVRB-mode, under the TCB where the system event triggers.   */
+.*/*                                                                 */
+.*/*  ZLISTEN CMD='STOP TSO',                                       +*/
+.*/*          ALIAS='P TSO',                                        +*/
+.*/*          EP=(2),PARM=(3),MF=(E,PLIST)                           */
+.*/*          LTR   R15,R15                                          */
+.*/*          BNZ   ERROR                                            */
+.*/*          ST    R1,LTOKEN   returned delete token                */
+.*/*                                                                 */
+.*/*  LTOKEN  DS    F                                                */
+.*/*  PLIST   ZLISTEN MF=L                                           */
+.*/*          ZZXRE ,           include ZZXRE mapping macro          */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* EXAMPLE 9:                                                      */
+.*/*                                                                 */
+.*/*  Define a listener routine that triggers when the STOP LLA      */
+.*/*  command is issued. The listener routine executes asynchronously*/
+.*/*  in IRB-mode, under the TCB specified by the XTTOKEN parameter, */
+.*/*  in the address space designated by the XSTOKEN parameter.      */
+.*/*                                                                 */
+.*/*  ZLISTEN CMD='STOP LLA',                                       +*/
+.*/*          ALIAS='P LLA',                                        +*/
+.*/*          XSTOKEN=ASCBTKN,                                      +*/
+.*/*          XTTOKEN=TCBTKN,                                       +*/
+.*/*          EP=(2),PARM=(3),MF=(E,PLIST)                           */
+.*/*          LTR   R15,R15                                          */
+.*/*          BNZ   ERROR                                            */
+.*/*          ST    R1,LTOKEN   returned delete token                */
+.*/*                                                                 */
+.*/*  LTOKEN  DS  F                                                  */
+.*/*  ASCBTKN DC  XL8           listener runs in this address space  */
+.*/*  TCBTKN  DC  XL16          listener runs under this task        */
+.*/*  PLIST   ZLISTEN MF=L                                           */
+.*/*          ZZXRE ,           include ZZXRE mapping macro          */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* EXAMPLE 10:                                                     */
+.*/*                                                                 */
+.*/*  Define a listener routine that triggeres when the STOP MYSTC   */
+.*/*  command is issued. The listener routine is triggered only when */
+.*/*  the command is issued by generic TSO user-ID TSU*X*7, and      */
+.*/*  executes in SVRB-mode, under the TCB that issued the command.  */
+.*/*                                                                 */
+.*/*  ZLISTEN CMD='STOP MYSTC',                                     +*/
+.*/*          ALIAS='P MYSTC',                                      +*/
+.*/*          TSU=TSUID,                                            +*/
+.*/*          EP=(2),PARM=(3),MF=(E,PLIST)                           */
+.*/*          LTR   R15,R15                                          */
+.*/*          BNZ   ERROR                                            */
+.*/*          ST    R1,LTOKEN   returned delete token                */
+.*/*                                                                 */
+.*/*  LTOKEN  DS    F                                                */
+.*/*  TSUID   DC    CL8'TSU*X*7'                                     */
+.*/*  PLIST   ZLISTEN MF=L                                           */
+.*/*          ZZXRE ,           include ZZXRE mapping macro          */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* EXAMPLE 11:                                                     */
+.*/*                                                                 */
+.*/*  Define a listener routine that triggers when message IEA405E   */
+.*/*  is issued. The listener routine executes asynchronously in     */
+.*/*  IRB-mode, under the jobstep task TCB of the address space      */
+.*/*  specified by the XSTOKEN parameter.                            */
+.*/*                                                                 */
+.*/*  ZLISTEN WTO='$HASP395',                                       +*/
+.*/*          XSTOKEN=ASCBTKN,                                      +*/
+.*/*          EP=(2),PARM=(3),MF=(E,PLIST)                           */
+.*/*          LTR   R15,R15                                          */
+.*/*          BNZ   ERROR                                            */
+.*/*          ST    R1,LTOKEN   returned delete token                */
+.*/*                                                                 */
+.*/*  LTOKEN  DS    F                                                */
+.*/*  ASCBTKN DC    XL8         Listener runs in this address space  */
+.*/*  PLIST   ZLISTEN MF=L                                           */
+.*/*          ZZXRE ,           include ZZXRE mapping macro          */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* EXAMPLE 12:                                                     */
+.*/*                                                                 */
+.*/*  Define a listener routine that triggers when message $HASP395  */
+.*/*  is issued on behalf of jobname MYJOB. The listener routine     */
+.*/*  executes in SVRB-mode under the TCB that issued the $HASP395   */
+.*/*  message.                                                       */
+.*/*                                                                 */
+.*/*  ZLISTEN WTO='$HASP395',JOB=MYJOB,                             +*/
+.*/*          EP=(2),PARM=(3),MF=(E,PLIST)                           */
+.*/*          LTR   R15,R15                                          */
+.*/*          BNZ   ERROR                                            */
+.*/*          ST    R1,LTOKEN   returned delete token                */
+.*/*                                                                 */
+.*/*  LTOKEN  DS    F                                                */
+.*/*  MYJOB   DC    CL8'MYJOB'  jobname where $HASP395 is issued     */
+.*/*  PLIST   ZLISTEN MF=L                                           */
+.*/*          ZZXRE ,           include ZZXRE mapping macro          */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* EXAMPLE 13:                                                     */
+.*/*                                                                 */
+.*/*  Define a listener routine that triggers when event code 55     */
+.*/*  is signaled by MVS/ENF for one of the following shortages:     */
+.*/*                                                                 */
+.*/*  - Pageable Storage Shortage                                    */
+.*/*  - Auxiliary Storage Shortage                                   */
+.*/*  - Available Frame Queue Shortage                               */
+.*/*  - Preferred Frame Queue Shortage                               */
+.*/*                                                                 */
+.*/*  Your listener routine executes in the address space where the  */
+.*/*  ENF event triggered. The listener routine persists for the     */
+.*/*  life of the ZLISTEN service request caller address space.      */
+.*/*                                                                 */
+.*/*  ZLISTEN ENF=55,EP=(2),PARM=(3),PERSIST=EOM,MF=(E,PLIST)        */
+.*/*          MF=(E,PLIST)                                           */
+.*/*          LTR   R15,R15                                          */
+.*/*          BNZ   ERROR                                            */
+.*/*          ST    R1,LTOKEN   returned delete token                */
+.*/*                                                                 */
+.*/*  LTOKEN  DS    F                                                */
+.*/*  PLIST   ZLISTEN MF=L                                           */
+.*/*          ZZXRE ,           include ZZXRE mapping macro          */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* EXAMPLE 14:                                                     */
+.*/*                                                                 */
+.*/*  Define a listener routine that triggers when event code 37     */
+.*/*  is signaled by MVS/ENF for one of the following SMF events:    */
+.*/*                                                                 */
+.*/*  - SMF has completed initialization                             */
+.*/*  - SMF has terminated                                           */
+.*/*                                                                 */
+.*/*  Your listener routine executes in the started task address     */
+.*/*  space specified by the XSTC= parameter. The listener routine   */
+.*/*  persists for the life of the ZLISTEN service request caller    */
+.*/*  task TCB.                                                      */
+.*/*                                                                 */
+.*/*  ZLISTEN ENF=37,EP=(2),PARM=(3),XSTC=(3),PERSIST=EOT,          +*/
+.*/*          MF=(E,PLIST)                                           */
+.*/*          LTR   R15,R15                                          */
+.*/*          BNZ   ERROR                                            */
+.*/*          ST    R1,LTOKEN   returned delete token                */
+.*/*                                                                 */
+.*/*  LTOKEN  DS    F                                                */
+.*/*  PLIST   ZLISTEN MF=L                                           */
+.*/*          ZZXRE ,           include ZZXRE mapping macro          */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* EXAMPLE 15:                                                     */
+.*/*                                                                 */
+.*/*  Define a listener routine that triggers when any XCF message   */
+.*/*  is issued. The listener routine executes in SVRB-mode under    */
+.*/*  the XCF TCB that issued the message.                           */
+.*/*                                                                 */
+.*/*  ZLISTEN XCF=*,EP=(2),PARM=(3),MF=(E,PLIST)                     */
+.*/*          LTR   R15,R15                                          */
+.*/*          BNZ   ERROR                                            */
+.*/*          ST    R1,LTOKEN   returned delete token                */
+.*/*                                                                 */
+.*/*  LTOKEN  DS    F                                                */
+.*/*  PLIST   ZLISTEN MF=L                                           */
+.*/*          ZZXRE ,           include ZZXRE mapping macro          */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* EXAMPLE 16:                                                     */
+.*/*                                                                 */
+.*/*  Define a listener routine that triggers when any Db2 message   */
+.*/*  is issued. The listener routine executes in SVRB-mode under    */
+.*/*  the Db2 TCB that issued the message.                           */
+.*/*                                                                 */
+.*/*  ZLISTEN DB2=*,EP=(2),PARM=(3),MF=(E,PLIST)                     */
+.*/*          LTR   R15,R15                                          */
+.*/*          BNZ   ERROR                                            */
+.*/*          ST    R1,LTOKEN   returned delete token                */
+.*/*                                                                 */
+.*/*  LTOKEN  DS    F                                                */
+.*/*  PLIST   ZLISTEN MF=L                                           */
+.*/*          ZZXRE ,           include ZZXRE mapping macro          */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* Copyright Ben Marino. 2021 - 2022 (unpublished)                 */
+.*/*                                                                 */
+.*/*******************************************************************/
+.*---------------------------CHANGE LOG-------------------------------*
+.*                                                                    *
+.* ID    Rel    Date       Author        Comments                     *
+.*--------------------------------------------------------------------*
+.* @01 | V1R1 | 08172021 | Ben Marino  | Initial version              *
+.*     |      |          |             |                              *
+.**********************************************************************
+.*-------+---------+---------+---------+---------+---------+---------+*
+&ZXRE    ZLISTEN &MF=,                                                 +
+               &EP=,&DSECT=,&DELETE=,                                  +
+               &LMOD=,&KEY=,&MODE=,&PARM=,&EXEC=,&PERSIST=,&ABTERM=,   +
+               &SOM=,&SOMJOB=,&SOMSTC=,&SOMTSU=,                       +
+               &EOM=,&EOMJOB=,&EOMSTC=,&EOMTSU=,&EOMSTOKEN=,           +
+               &CMD=,&ALIAS=,&WTO=,&ENF=,&XCF=,&DB2=,                  +
+               &ASCB=,&STOKEN=,&JOB=,&STC=,&TSU=,                      +
+               &XJOB=,&XSTC=,&XTSU=,&XTCB=,&XASCB=,&XSTOKEN=,&XTTOKEN=
+.*
+         COPY  ZZGBL
+.*
+         LCLB  &ZEP             EP=
+&ZEP     SETB  0
+.*
+         LCLB  &ZKY             KEY={0|8}
+&ZKY     SETB  0
+.*
+         LCLB  &ZMD             MODE={SUP|PROB}
+&ZMD     SETB  0
+.*
+         LCLB  &XRM             EXEC={TCB|SRB}
+&XRM     SETB  0
+.*
+         LCLB  &ZTK             STOKEN=
+&ZTK     SETB  0
+.*
+         LCLB  &ZPM             PERSIST=EOM
+&ZPM     SETB  0
+.*
+         LCLB  &ZPT             PERSIST=EOT
+&ZPT     SETB  0
+.*
+         LCLB  &ZPL             PERSIST=IPL
+&ZPL     SETB  0
+.*
+         LCLB  &ZPN             PERSIST=NO
+&ZPN     SETB  0
+.*
+         LCLB  &ZAB             ABTERM={NO|YES}
+&ZAB     SETB  0
+.*
+         LCLB  &SAA             SOM=
+&SAA     SETB  0
+.*
+         LCLB  &MAA             EOM=
+&MAA     SETB  0
+.*
+         LCLB  &ZNF             ENF=
+&ZNF     SETB  0
+.*
+         LCLB  &SVC             SVC=
+&SVC     SETB  0
+.*
+         LCLB  &DBA             DB2=*
+&DBA     SETB  0
+.*
+         LCLB  &DBX             DB2=message
+&DBX     SETB  0
+.*
+         LCLB  &XXA             XCF=*
+&XXA     SETB  0
+.*
+.*
+         LCLB  &XXF             XCF=message
+&XXF     SETB  0
+.*
+         LCLB  &CAA             CMD=*
+&CAA     SETB  0
+.*
+         LCLB  &CAC             CMD=cmd
+&CAC     SETB  0
+.*
+         LCLB  &CAL             ALIAS=cmd
+&CAL     SETB  0
+.*
+         LCLB  &WAM             WTO=message
+&WAM     SETB  0
+.*
+         LCLB  &AAS             ASCB=
+&AAS     SETB  0
+.*
+         LCLB  &ATK             STOKEN=
+&ATK     SETB  0
+.*
+         LCLB  &XTK             XSTOKEN=
+&XTK     SETB  0
+.*
+         LCLB  &XTT             XTTOKEN=
+&XTT     SETB  0
+.*
+         LCLB  &XAS             XASCB=
+&XAS     SETB  0
+.*
+         LCLB  &XTC             XTCB=
+&XTC     SETB  0
+.*
+         LCLB  &XYZ             XYZ=reserved-field
+&XYZ     SETB  0
+.*
+         LCLB  &ZSOM            SOM system event type
+&ZSOM    SETB  0
+.*
+         LCLB  &ZEOM            EOM system event type
+&ZEOM    SETB  0
+.*
+         LCLB  &ZCMD            CMD system event type
+&ZCMD    SETB  0
+.*
+         LCLB  &ZWTO            WTO system event type
+&ZWTO    SETB  0
+.*
+         LCLB  &ZENF            ENF system event type
+&ZENF    SETB  0
+.*
+         LCLB  &ZDB2            DB2 system event type
+&ZDB2    SETB  0
+.*
+         LCLB  &ZXCF            XCF system event type
+&ZXCF    SETB  0
+.*
+         LCLB  &ZSVC            SVC system event type
+&ZSVC    SETB  0
+.*
+         LCLC  &DUP             mutually exclusive parameter
+         LCLC  &ZJOB            JOB(2); STC(3); TSU(4)
+         LCLC  &ZEXEC           EXEC={TCB|SRB}
+         LCLC  &ZXJOB           XJOB(2); XSTC(3); XTSU(4)
+.*
+.*--------------------------------------------------------------------*
+.**      Common parameters section                                    *
+.*-------+---------+---------+---------+---------+---------+---------+*
+.*
+.COMMON  ANOP  ,
+         AIF   ('&DELETE' NE '').DEL000
+         AIF   ('&DSECT' EQ 'YES').YDSECT
+         AIF   ('&MF' EQ 'L').LIST
+         AIF   ('&MF(2)'(1,1) EQ '(').COM000
+         LAE   1,&MF(2)                          .parmlist
+         AGO   .COM010
+.COM000  ANOP  ,
+         LAE   1,0&MF(2)                         .parmlist
+.*
+.COM010  ANOP  ,
+         XC    0(XRE@CLR,1),0(1)
+         MVC   XREID-XRE(4,1),=CL4'ZXRE'         .ID
+.*
+.**      EP= parameter
+.*
+.EPA000  ANOP  ,
+&DUP     SETC  'EP='
+&ZEP     SETB  0
+         AIF   ('&EP' EQ '').MOD000
+         AIF   ('&LMOD' NE '').ERR06
+&ZEP     SETB  1
+         AIF   ('&EP'(1,1) EQ '(').EPA010
+         MVC   XREEP-XRE(4,1),&EP                .EP=
+         AGO   .PAR000
+.*
+.EPA010  ANOP  ,
+         ST    &EP,XREEP-XRE(1)                  .EP=
+         AGO   .PAR000
+.*
+.**      LMOD= parameter
+.*
+.MOD000  ANOP  ,
+&DUP     SETC  'LMOD='
+         AIF   ('&LMOD' EQ '').ERR01
+         AIF   ('&EP' NE '').ERR06
+         AIF   ('&EXEC' EQ 'SRB').ERR10
+&ZEP     SETB  0
+         AIF   ('&LMOD'(1,1) EQ '(').MOD010
+         MVC   XREMODNM-XRE(8,1),&LMOD           .NAME=
+         AGO   .PAR000
+.*
+.MOD010  ANOP  ,
+         MVC   XREMODNM-XRE(8,1),0(&LMOD)        .NAME=
+.*
+.**      PARM= parameter
+.*
+.PAR000  ANOP  ,
+         AIF   ('&PARM' EQ '').KEY000
+         AIF   ('&PARM'(1,1) EQ '(').PAR010
+         MVC   XREPARM-XRE(4,1),&PARM            .PARM=
+         AGO   .KEY000
+.*
+.PAR010  ANOP  ,
+         ST    &PARM,XREPARM-XRE(1)              .PARM=
+.*
+.**      KEY= parameter
+.*
+.KEY000  ANOP  ,
+         AIF   ('&KEY' EQ '').KEY010
+         AIF   ('&KEY' EQ '8').KEY010
+         AIF   ('&KEY' NE '0').ERR04
+&ZKY     SETB  1                                 .KEY=0
+         AGO   .MODE00
+.KEY010  ANOP  ,
+&ZKY     SETB  0                                 .KEY=8
+.*
+.**      MODE= parameter
+.*
+.MODE00  ANOP  ,
+&ZMD     SETB  0                                 .MODE=PROB
+         AIF   ('&MODE' EQ '').EXEC00
+         AIF   ('&MODE' EQ 'PROB').EXEC00
+         AIF   ('&MODE' NE 'SUP').ERR05
+&ZMD     SETB  1                                 .MODE=SUP
+.*
+.**      EXEC= parameter
+.*
+.EXEC00  ANOP  ,
+&XRM     SETB  1                                 .EXEC=TCB
+&ZEXEC   SETC  'TCB'
+         AIF   ('&EXEC' EQ '').PER000
+         AIF   ('&EXEC' EQ 'TCB').PER000
+         AIF   ('&EXEC' NE 'SRB').ERR08
+&XRM     SETB  0                                 .EXEC=SRB
+&ZEXEC   SETC  'SRB'
+.*
+.**      PERSIST= parameter
+.*
+.PER000  ANOP  ,
+         AIF   ('&PERSIST' NE '').PER010
+&ZPN     SETB  1                                 .PERSIST=NO
+         AGO   .ABT000
+.*
+.PER010  ANOP  ,
+         AIF   ('&PERSIST' NE 'NO').PER020
+&ZPN     SETB  1                                 .PERSIST=NO
+         AGO   .ABT000
+.*
+.PER020  ANOP  ,
+         AIF   ('&PERSIST' NE 'EOM').PER030
+&ZPM     SETB  1                                 .PERSIST=EOM
+         AGO   .ABT000
+.*
+.PER030  ANOP  ,
+         AIF   ('&PERSIST' NE 'EOT').PER040
+&ZPT     SETB  1                                 .PERSIST=EOT
+         AGO   .ABT000
+.*
+.PER040  ANOP  ,
+         AIF   ('&PERSIST' NE 'IPL').ERR03
+&ZPL     SETB  1
+.*
+.**      ABTERM= parameter
+.*
+.ABT000  ANOP  ,
+&ZAB     SETB  0
+         AIF   ('&ABTERM' EQ '').IDP000
+         AIF   ('&ABTERM' EQ 'NO').IDP000
+         AIF   ('&ABTERM' NE 'YES').ERR09
+&ZAB     SETB  1
+.*
+.*--------------------------------------------------------------------*
+.**      Check individual parameters                                  *
+.*-------+---------+---------+---------+---------+---------+---------+*
+.*
+.IDP000  ANOP  ,
+         AIF   ('&CMD' NE '').CMD000
+         AIF   ('&ALIAS' NE '').ALI000
+         AIF   ('&ENF' NE '').ENF000
+         AIF   ('&WTO' NE '').WTO000
+         AIF   ('&SOM' NE '').SOM000
+         AIF   ('&DB2' NE '').DB2000
+         AIF   ('&XCF' NE '').XCF000
+         AIF   ('&SOMJOB' NE '').SOMJOB
+         AIF   ('&SOMSTC' NE '').SOMSTC
+         AIF   ('&SOMTSU' NE '').SOMTSU
+         AIF   ('&EOM' NE '').EOM000
+         AIF   ('&EOMJOB' NE '').EOMJOB
+         AIF   ('&EOMSTC' NE '').EOMSTC
+         AIF   ('&EOMTSU' NE '').EOMTSU
+         AGO   .ERR13
+.*
+.*--------------------------------------------------------------------*
+.**      DELETE parameter section                                     *
+.*-------+---------+---------+---------+---------+---------+---------+*
+.*
+.DEL000  ANOP  ,
+         AIF   ('&DELETE'(1,1) EQ '(').DEL010
+         L     1,&DELETE              .DELETE token
+         AGO   .DEL020
+.*
+.DEL010  ANOP  ,
+         LR    1,&DELETE              .DELETE token
+.*
+.DEL020  ANOP  ,
+         LAE   15,&LISTNDL            .PCID
+         ZZMAC GEN=XPC                .XPCSRV PC router
+         MEXIT ,
+.*
+.*--------------------------------------------------------------------*
+.**      CMD={*|command} parameter section                            *
+.*-------+---------+---------+---------+---------+---------+---------+*
+.*
+.CMD000  ANOP  ,
+&CAA     SETB  0
+         AIF   ('&CMD' NE '*').CMD020
+         AIF   ('&ALIAS' EQ '' OR '&ALIAS' EQ '*').CMD010
+         AGO   .ERR07
+.*
+.CMD010  ANOP  ,
+         MVI   XREEVENT-XRE(1),C'*'                .CMD=*
+&CAA     SETB  1
+         AGO   .CMD050
+.*
+.CMD020  ANOP  ,
+&CAC     SETB  0
+         AIF   ('&CMD' EQ '').ALI000
+&CAC     SETB  1
+         AIF   ('&CMD'(1,1) EQ '(').CMD040
+         AIF   ('&CMD'(1,1) EQ '''').CMD030
+         MVC   XREEVENT-XRE(XRE@DATA,1),&CMD       .CMD=cmd
+         AGO   .CMD050
+.*
+.CMD030  ANOP  ,
+         MVC   XREEVENT-XRE(XRE@DATA,1),=CL72&CMD  .CMD=cmd
+         AGO   .CMD050
+.*
+.CMD040  ANOP  ,
+         MVC   XREEVENT-XRE(CRE@DATA,1),0(&CMD)    .CMD=cmd
+.*
+.CMD050  ANOP  ,
+&ZCMD    SETB  1
+.*
+.*--------------------------------------------------------------------*
+.**      ALIAS={*|commad} parameter section                           *
+.*-------+---------+---------+---------+---------+---------+---------+*
+.*
+.ALI000  ANOP  ,
+&CAL     SETB  0
+         AIF   ('&DELETE' NE '').ERR06
+&CAL     SETB  1
+         AIF   ('&ALIAS' EQ '*').ALI030
+         AIF   ('&ALIAS'(1,1) EQ '(').ALI020
+         AIF   ('&ALIAS'(1,1) EQ '''').ALI010
+         MVC   XREALIAS-XRE(XRE@ADTA,1),&ALIAS     .ALIAS=commad
+         AGO   .ALI050
+.*
+.ALI010  ANOP  ,
+         MVC   XREALIAS-XRE(XRE@ADTA,1),=CL72&ALIAS .ALIAS=cmd
+         AGO   .ALI050
+.*
+.ALI020  ANOP  ,
+         MVC   XREALIAS-XRE(XRE@ADTA,1),0(&ALIAS)  .ALIAS=cmd
+         AGO   .ALI050
+.*
+.ALI030  ANOP  ,
+         AIF   ('&CMD' EQ '' OR '&CMD' EQ '*').ALI040
+         AGO   .ERR07
+.*
+.ALI040  ANOP  ,
+         MVI   XREALIAS-XRE(1),C'*'                  .ALIAS=* trigger
+.*
+.ALI050  ANOP  ,
+&ZCMD    SETB  1
+         AGO   .WTRIGER            check what triggers the event
+.*
+.*--------------------------------------------------------------------*
+.**      WTO=message parameter section                                *
+.*-------+---------+---------+---------+---------+---------+---------+*
+.*
+.WTO000  ANOP  ,
+&WAM     SETB  1
+         AIF   ('&WTO'(1,1) EQ '(').WTO020
+         AIF   ('&WTO'(1,1) EQ '''').WTO010
+         MVC   XREEVENT-XRE(XRE@DATA,1),&WTO        .WTO=msg
+         AGO   .WTO030
+.*
+.WTO010  ANOP  ,
+         MVC   XREEVENT-XRE(XRE@DATA,1),=CL72&WTO   .WTO=msg
+         AGO   .WTO030
+.*
+.WTO020  ANOP  ,
+         MVC   XREEVENT-XRE(XRE@DATA,1),0(&WTO)     .WTO=msg
+.*
+.WTO030  ANOP  ,
+&ZWTO    SETB  1
+         AGO   .WTRIGER       check what triggers the event
+.*
+.*--------------------------------------------------------------------*
+.**      DB2={*|msgID} parameter section                              *
+.*-------+---------+---------+---------+---------+---------+---------+*
+.*
+.DB2000  ANOP  ,
+         AIF   ('&DB2' NE '*').DB2005
+&DBA     SETB  1
+         AGO   .DB2030
+.*
+.DB2005  ANOP  ,
+&DBX     SETB  1
+         AIF   ('&DB2'(1,1) EQ '(').DB2020
+         AIF   ('&DB2'(1,1) EQ '''').DB2010
+         MVC   XREEVENT-XRE(XRE@DATA,1),&DB2        .DB2=msg
+         AGO   .DB2030
+.*
+.DB2010  ANOP  ,
+         MVC   XREEVENT-XRE(XRE@DATA,1),=CL72&DB2   .DB2=msg
+         AGO   .DB2030
+.*
+.DB2020  ANOP  ,
+         MVC   XREEVENT-XRE(XRE@DATA,1),0(&DB2)     .DB2=msg
+.*
+.DB2030  ANOP  ,
+&ZDB2    SETB  1
+         AGO   .WTRIGER       check what triggers the event
+.*
+.*--------------------------------------------------------------------*
+.**      XCF={*|msgID} parameter section                              *
+.*-------+---------+---------+---------+---------+---------+---------+*
+.*
+.XCF000  ANOP  ,
+         AIF   ('&XCF' NE '*').XCF005
+&XXA     SETB  1
+         AGO   .XCF030
+.*
+.XCF005  ANOP  ,
+&XXF     SETB  1
+         AIF   ('&XCF'(1,1) EQ '(').XCF020
+         AIF   ('&XCF'(1,1) EQ '''').XCF010
+         MVC   XREEVENT-XRE(XRE@DATA,1),&XCF        .XCF=msg
+         AGO   .XCF030
+.*
+.XCF010  ANOP  ,
+         MVC   XREEVENT-XRE(XRE@DATA,1),=CL72&XCF   .XCF=msg
+         AGO   .XCF030
+.*
+.XCF020  ANOP  ,
+         MVC   XREEVENT-XRE(XRE@DATA,1),0(&XCF)     .XCF=msg
+.*
+.XCF030  ANOP  ,
+&ZXCF    SETB  1
+         AGO   .WTRIGER       check what triggers the event
+.*
+.*--------------------------------------------------------------------*
+.**      ENF=code parameter section                                   *
+.*-------+---------+---------+---------+---------+---------+---------+*
+.*
+.ENF000  ANOP  ,
+&DUP     SETC  'ENF='
+         AIF   ('&PERSIST' EQ 'IPL').ERR14
+&ZNF     SETB  1
+         AIF   ('&ENF'(1,1) EQ '(').ENF020
+         AIF   (T'&ENF NE 'N').ENF010
+         LA    0,&ENF                  .ENF=code
+         ST    0,XRESIGNL-XRE(1)       .init code
+         AGO   .ENF030
+.*
+.ENF010  ANOP  ,
+         MVC   XRESIGNL-XRE(4,1),&ENF  .ENF=code
+         AGO   .ENF030
+.*
+.ENF020  ANOP  ,
+         ST    &ENF,XRESIGNL-XRE(1)    .ENF=code
+.*
+.ENF030  ANOP  ,
+&ZENF    SETB  1
+         AIF   ('&JOB' NE '').ERR06
+         AIF   ('&STC' NE '').ERR06
+         AIF   ('&TSU' NE '').ERR06
+         AIF   ('&ASCB' NE '').ERR06
+         AIF   ('&STOKEN' NE '').ERR06
+         AGO   .WTRIGER     check what triggers the event
+.*
+.*--------------------------------------------------------------------*
+.**      SOM={*|SOMJOB=|SOMSTC=|SOMTSU=} parameter section            *
+.*-------+---------+---------+---------+---------+---------+---------+*
+.*
+.**      SOM= parameter
+.*
+.SOM000  ANOP  ,
+         AIF   ('&SOM' NE '*').ERR12
+&SAA     SETB  1
+         AGO   .SOM099
+.*
+.**      SOMJOB= parameter
+.*
+.SOMJOB  ANOP  ,
+&ZJOB    SETC  '&JOBID'
+         AIF   ('&SOMJOB'(1,1) EQ '(').SOMJ10
+         MVC   XREEJOBN-XRE(8,1),&SOMJOB         .SOMJOB=trigger
+         AGO   .SOM099
+.*
+.SOMJ10  ANOP  ,
+         MVC   XREEJOBN-XRE(8,1),0(&SOMJOB)      .SOMJOB=trigger
+         AGO   .SOM099
+.*
+.**      SOMSTC= parameter
+.*
+.SOMSTC  ANOP  ,
+&ZJOB    SETC  '&STCID'
+         AIF   ('&SOMSTC'(1,1) EQ '(').SOMS10
+         MVC   XREEJOBN-XRE(8,1),&SOMSTC         .SOMSTC=trigger
+         AGO   .SOM099
+.*
+.SOMS10  ANOP  ,
+         MVC   XREEJOBN-XRE(8,1),0(&SOMSTC)      .SOMSTC=trigger
+         AGO   .SOM099
+.*
+.**      SOMTSU= parameter
+.*
+.SOMTSU  ANOP  ,
+&ZJOB    SETC  '&TSUID'
+         AIF   ('&SOMTSU'(1,1) EQ '(').SOMT10
+         MVC   XREEJOBN-XRE(8,1),&SOMTSU         .SOMTSU=trigger
+         AGO   .SOM099
+.*
+.SOMT10  ANOP  ,
+         MVC   XREEJOBN-XRE(8,1),0(&SOMTSU)      .SOMTSU=userid
+.*
+.SOM099  ANOP  ,
+&ZSOM    SETB  1
+         AIF   ('&JOB' NE '').ERR06
+         AIF   ('&STC' NE '').ERR06
+         AIF   ('&TSU' NE '').ERR06
+         AIF   ('&ASCB' NE '').ERR06
+         AIF   ('&STOKEN' NE '').ERR06
+         AGO   .XTARGET              check where listener needs to run
+.*
+.*--------------------------------------------------------------------*
+.**      EOM={*|EOMJOB=|EOMSTC=|EOMTSU=} section                      *
+.*-------+---------+---------+---------+---------+---------+---------+*
+.*
+.**      EOM=* parameter
+.*
+.EOM000  ANOP  ,
+         AIF   ('&EOM' NE '*').ERR00
+&MAA     SETB  1
+         AGO   .EOM099
+.*
+.**      EOMJOB= parameter
+.*
+.EOMJOB  ANOP  ,
+&ZJOB    SETC  '&JOBID'
+         AIF   ('&EOMJOB'(1,1) EQ '(').EOMJ10
+         MVC   XREEJOBN-XRE(8,1),&EOMJOB         .EOMJOB=trigger
+         AGO   .EOM099
+.*
+.EOMJ10  ANOP  ,
+         MVC   XREEJOBN-XRE(8,1),0(&EOMJOB)      .EOMJOB-trigger
+         AGO   .EOM099
+.*
+.**      EOMSTC= parameter
+.*
+.EOMSTC  ANOP  ,
+&ZJOB    SETC  '&STCID'
+         AIF   ('&EOMSTC'(1,1) EQ '(').EOMS10
+         MVC   XREEJOBN-XRE(8,1),&EOMSTC         .EOMSTC=trigger
+         AGO   .EOM099
+.*
+.EOMS10  ANOP  ,
+         MVC   XREEJOBN-XRE(8,1),0(&EOMSTC)      .EOMSTC=trigger
+         AGO   .EOM099
+.*
+.**      EOMTSU= parameter
+.*
+.EOMTSU  ANOP  ,
+&ZJOB    SETC  '&TSUID'
+         AIF   ('&EOMTSU'(1,1) EQ '(').EOMT10
+         MVC   XREEJOBN-XRE(8,1),&EOMTSU         .EOMTSU=trigger
+         AGO   .EOM099
+.*
+.EOMT10  ANOP  ,
+         MVC   XREEJOBN-XRE(8,1),0(&EOMTSU)      .EOMTSU=trigger
+         AGO   .EOM099
+.*
+.EOM099  ANOP  ,
+&DUP     SETC  'EOM='
+&ZEOM    SETB  1
+         AIF   ('&JOB' NE '').ERR06
+         AIF   ('&STC' NE '').ERR06
+         AIF   ('&TSU' NE '').ERR06
+         AIF   ('&ASCB' NE '').ERR06
+         AIF   ('&STOKEN' NE '').ERR06
+         AGO   .XTARGET              check where listener needs to run
+.*
+.*--------------------------------------------------------------------*
+.*                                                                    *
+.**      {JOB=|STC=|TSU=|ASCB=|STOKEN=} parameters.                   *
+.*                                                                    *
+.**      These mutually exclusive parameters are used to determine    *
+.*       the address space where the system event will trigger.       *
+.*                                                                    *
+.*-------+---------+---------+---------+---------+---------+---------+*
+.*
+.WTRIGER ANOP  ,
+.*
+.**      JOB= parameter
+.*
+.JOB000  ANOP  ,
+         AIF   ('&JOB' EQ '').STC000
+&DUP     SETC  'JOB='
+         AIF   ('&STC' NE '').ERR06
+         AIF   ('&TSU' NE '').ERR06
+         AIF   ('&ASCB' NE '').ERR06
+         AIF   ('&STOKEN' NE '').ERR06
+.*
+&ZJOB    SETC  '&JOBID'
+         AIF   ('&JOB'(1,1) EQ '(').JOB010
+         MVC   XREEJOBN-XRE(8,1),&JOB            .JOB=trigger
+         AGO   .JOB099
+.*
+.JOB010  ANOP  ,
+         MVC   XREEJOBN-XRE(8,1),0(&JOB)         .JOB=trigger
+         AGO   .JOB099
+.*
+.**      STC= parameter
+.*
+.STC000  ANOP  ,
+         AIF   ('&STC' EQ '').TSU000
+&DUP     SETC  'STC='
+         AIF   ('&JOB' NE '').ERR06
+         AIF   ('&TSU' NE '').ERR06
+         AIF   ('&ASCB' NE '').ERR06
+         AIF   ('&STOKEN' NE '').ERR06
+.*
+&ZJOB    SETC  '&STCID'
+         AIF   ('&STC'(1,1) EQ '(').STC010
+         MVC   XREEJOBN-XRE(8,1),&STC            .STC=trigger
+         AGO   .JOB099
+.*
+.STC010  ANOP  ,
+         MVC   XREEJOBN-XRE(8,1),0(&STC)         .STC=trigger
+         AGO   .JOB099
+.*
+.**      TSU= parameter
+.*
+.TSU000  ANOP  ,
+         AIF   ('&TSU' EQ '').ASCB00
+&DUP     SETC  'TSU='
+         AIF   ('&JOB' NE '').ERR06
+         AIF   ('&STC' NE '').ERR06
+         AIF   ('&ASCB' NE '').ERR06
+         AIF   ('&STOKEN' NE '').ERR06
+.*
+&ZJOB    SETC  '&TSUID'
+         AIF   ('&TSU'(1,1) EQ '(').TSU010
+         MVC   XREEJOBN-XRE(8,1),&TSU            .TSU=trigger
+         AGO   .JOB099
+.*
+.TSU010  ANOP  ,
+         MVC   XREEJOBN-XRE(8,1),0(&TSU)         .TSU=trigger
+         AGO   .JOB099
+.*
+.**      ASCB= parameter
+.*
+.ASCB00  ANOP  ,
+         AIF   ('&ASCB' EQ '').STOKEN
+&DUP     SETC  'ASCB='
+         AIF   ('&JOB' NE '').ERR06
+         AIF   ('&STC' NE '').ERR06
+         AIF   ('&TSU' NE '').ERR06
+         AIF   ('&STOKEN' NE '').ERR06
+.*
+&AAS     SETB  1
+         AIF   ('&ASCB'(1,1) EQ '(').ASCB10
+         MVC   XREEASCB-XRE(4,1),&ASCB           .ASCB=trigger
+         AGO   .JOB099
+.*
+.ASCB10  ANOP  ,
+         ST    &ASCB,XREEASCB-XRE(1)             .ASCB=trigger
+         AGO   .JOB099
+.*
+.**      STOKEN= parameter
+.*
+.STOKEN  ANOP  ,
+         AIF   ('&STOKEN' EQ '').JOB099
+&DUP     SETC  'STOKEN='
+         AIF   ('&JOB' NE '').ERR06
+         AIF   ('&STC' NE '').ERR06
+         AIF   ('&TSU' NE '').ERR06
+         AIF   ('&ASCB' NE '').ERR06
+.*
+&ATK     SETB  1
+         AIF   ('&STOKEN'(1,1) EQ '(').STKN10
+         MVC   XREESTKN-XRE(8,1),&STOKEN         .STOKEN=trigger
+         AGO   .JOB099
+.*
+.STKN10  ANOP  ,
+         MVC   XREESTKN-XRE(8,1),0(&STOKEN)      .STOKEN=trigger
+         AGO   .JOB099
+.*
+.JOB099  ANOP  ,
+         AGO   .XTARGET           check where listener routine runs
+.*
+.*--------------------------------------------------------------------*
+.*                                                                    *
+.**      {XJOB=|XSTC=|XTSU=|XASCB=|XSTOKEN=|XTCB=|XTTOKEN=} parms     *
+.*                                                                    *
+.**      These mutually exclusive parameters are used to determine    *
+.*       where the listener routine, when triggered, executes.        *
+.*                                                                    *
+.*-------+---------+---------+---------+---------+---------+---------+*
+.*
+.XTARGET ANOP  ,
+.*
+.**      XJOB= parameter
+.*
+.XJOB00  ANOP  ,
+         AIF   ('&XJOB' EQ '').XSTC00
+&DUP     SETC  'XJOB='
+         AIF   ('&XSTC' NE '').ERR06
+         AIF   ('&XTSU' NE '').ERR06
+         AIF   ('&XASCB' NE '').ERR06
+         AIF   ('&XSTOKEN' NE '').ERR06
+&ZXJOB   SETC  '&JOBID'
+         AIF   ('&XJOB'(1,1) EQ '(').XJOB10
+         MVC   XREXJOBN-XRE(8,1),&XJOB     .XJOB=where rtn runs
+         AGO   .XJOB999
+.*
+.XJOB10  ANOP  ,
+         MVC   XREXJOBN-XRE(8,1),0(&XJOB)  .XJOB=where rtn runs
+         AGO   .XJOB999
+.*
+.**      XSTC= parameter
+.*
+.XSTC00  ANOP  ,
+         AIF   ('&XSTC' EQ '').XTSU00
+&DUP     SETC  'XSTC='
+         AIF   ('&XJOB' NE '').ERR06
+         AIF   ('&XTSU' NE '').ERR06
+         AIF   ('&XASCB' NE '').ERR06
+         AIF   ('&XSTOKEN' NE '').ERR06
+&ZXJOB   SETC  '&STCID'
+         AIF   ('&XSTC'(1,1) EQ '(').XSTC10
+         MVC   XREXJOBN-XRE(8,1),&XSTC     .XSTC=where rtn runs
+         AGO   .XJOB999
+.*
+.XSTC10  ANOP  ,
+         MVC   XREXJOBN-XRE(8,1),0(&XSTC)  .XSTC=where rtn runs
+         AGO   .XJOB999
+.*
+.**      XTSU= parameter
+.*
+.XTSU00  ANOP  ,
+         AIF   ('&XTSU' EQ '').XASCB0
+&DUP     SETC  'XTSU='
+         AIF   ('&XJOB' NE '').ERR06
+         AIF   ('&XSTC' NE '').ERR06
+         AIF   ('&XASCB' NE '').ERR06
+         AIF   ('&XSTOKEN' NE '').ERR06
+&ZXJOB   SETC  '&TSUID'
+         AIF   ('&XTSU'(1,1) EQ '(').XTSU10
+         MVC   XREXJOBN-XRE(8,1),&XTSU     .XTSU=where rtn runs
+         AGO   .XJOB999
+.*
+.XTSU10  ANOP  ,
+         MVC   XREXJOBN-XRE(8,1),0(&XTSU)  .XTSU=where rtn runs
+         AGO   .XJOB999
+.*
+.**      XASCB= parameter
+.*
+.XASCB0  ANOP  ,
+         AIF   ('&XASCB' EQ '').XSTOK0
+&DUP     SETC  'XASCB='
+         AIF   ('&XJOB' NE '').ERR06
+         AIF   ('&XSTC' NE '').ERR06
+         AIF   ('&XTSU' NE '').ERR06
+         AIF   ('&XSTOKEN' NE '').ERR06
+&XAS     SETB  1
+         AIF   ('&XASCB'(1,1) EQ '(').XASCB5
+         MVC   XREXASCB-XRE(4,1),&XASCB      .XASCB=where rtn runs
+         AGO   .XJOB999
+.*
+.XASCB5  ANOP  ,
+         ST    &XASCB,XREXASCB-XRE(1)        .XASCB=where rtn runs
+         AGO   .XJOB999
+.*
+.**      XSTOKEN parameter
+.*
+.XSTOK0  ANOP  ,
+         AIF   ('&XSTOKEN' EQ '').XTCB00
+&DUP     SETC  'XSTOKEN='
+         AIF   ('&XJOB' NE '').ERR06
+         AIF   ('&XSTC' NE '').ERR06
+         AIF   ('&XTSU' NE '').ERR06
+         AIF   ('&XASCB' NE '').ERR06
+&XTK     SETB  1
+         AIF   ('&XSTOKEN'(1,1) EQ '(').XRE070
+         MVC   XREXSTKN-XRE(8,1),&XSTOKEN  .XSTOKEN=where rtn runs
+         AGO   .XJOB999
+.*
+.XRE070  ANOP  ,
+         MVC   XREXSTKN-XRE(8,1),0(&XSTOKEN) .XSTOKEN=where rtn runs
+         AGO   .XJOB999
+.*
+.**      XTCB= parameter
+.*
+.XTCB00  ANOP  ,
+         AIF   ('&XTCB' EQ '').XTTKN0
+&DUP     SETC  'XTCB='
+         AIF   ('&XTTOKEN' NE '').ERR06
+         AIF   ('&ZEXEC' EQ 'SRB').ERR10
+&XTC     SETB  1
+         AIF   ('&XTCB'(1,1) EQ '(').XTCB10
+         MVC   XREXTCB-XRE(4,1),&XTCB     .XTCB=where rtn runs
+         AGO   .XJOB999
+.*
+.XTCB10  ANOP  ,
+         ST    &XTCB,XREXTCB-XRE(1)       .XTCB=where rtn runs
+         AGO   .XJOB999
+.*
+.**      XTTOKEN= parameter
+.*
+.XTTKN0  ANOP  ,
+         AIF   ('&XTTOKEN' EQ '').XJOB999
+&DUP     SETC  'XTTOKEN='
+         AIF   ('&XTCB' NE '').ERR06
+         AIF   ('&ZEXEC' EQ 'SRB').ERR10
+&XTT     SETB  1
+         AIF   ('&XTTOKEN'(1,1) EQ '(').XTTKN5
+         MVC   XREXTTKN-XRE(16,1),&XTTOKEN .XTTOKEN=where rtn runs
+         AGO   .XJOB999
+.*
+.XTTKN5  ANOP  ,
+         MVC   XREXTTKN-XRE(16,1),0(&XTTOKEN) .XTTOKEN=where rtn runs
+.*
+.XJOB999 ANOP  ,
+         AGO   .VALTRGR        check if a valid trigger was found
+.*
+.*--------------------------------------------------------------------*
+.**      Validity check trigger sesction                              *
+.*-------+---------+---------+---------+---------+---------+---------+*
+.*
+.VALTRGR ANOP  ,
+         AIF   (&ZSOM EQ 1).XPC900
+         AIF   (&ZEOM EQ 1).XPC900
+         AIF   (&ZCMD EQ 1).XPC900
+         AIF   (&ZWTO EQ 1).XPC900
+         AIF   (&ZENF EQ 1).XPC900
+         AIF   (&ZXCF EQ 1).XPC900
+         AIF   (&ZDB2 EQ 1).XPC900
+         AGO   .ERR13
+.*
+.*--------------------------------------------------------------------*
+.**      Issue PC call section                                        *
+.*-------+---------+---------+---------+---------+---------+---------+*
+.*
+.XPC900  ANOP  ,
+         AIF   ('&ZJOB' EQ '').XPC910
+         MVI   XREEJOB-XRE(1),&ZJOB     .trigger address space type
+*
+.XPC910  ANOP  ,
+         AIF   ('&ZXJOB' EQ '').XPC999
+         MVI   XREXJOB-XRE(1),&ZXJOB    .target address space type
+.*
+
+.XPC999  ANOP  ,
+         MVI   XRETYPE-XRE(1),B'&ZEOM&ZCMD&ZWTO&ZENF&ZSOM&ZDB2&ZXCF&ZSV+
+               C'
+         MVC   XREOPTS-XRE(4,1),=B'&ZEP&ZKY&ZMD&ZPM&ZPL&DBA&DBX&ZPN&SAA+
+               &MAA&XXA&CAA&CAC&CAL&ZPT&WAM&AAS&ATK&XTK&XTT&XAS&XTC&XRM+
+               &ZAB&ZNF&XXF.000000'
+.*
+         LAE   15,&LISTEN             .PCID
+         ZZMAC GEN=XPC                .XPCSRV PC router
+         MEXIT ,
+.*
+.**      ZLISTEN MF=L
+.*
+.YDSECT  ANOP  ,
+         ZZXRE ,                      .ZZXRE DSECT
+         MEXIT ,
+.*
+.LIST    ANOP  ,
+&ZXRE    DS    0F
+         DS    CL(XRE@SIZE)           .Exapnd ZZXRE map
+         MEXIT ,
+.*
+.**      Macro Notes
+.*
+.ERR00   MNOTE 8,'*** ZLISTEN Invalid EOM= operand specified'
+         MEXIT ,
+.ERR01   MNOTE 8,'*** ZLISTEN Invalid EP/LMOD= operand specified'
+         MEXIT ,
+.ERR03   MNOTE 8,'*** ZLISTEN Invalid PERSIST= operand specified'
+         MEXIT ,
+.ERR04   MNOTE 8,'*** ZLISTEN Invalid KEY= operand specified'
+         MEXIT ,
+.ERR05   MNOTE 8,'*** ZLISTEN Invalid MODE= operand specified'
+         MEXIT ,
+.ERR06   MNOTE 8,'*** ZLISTEN Mutually exclusive parameter: &DUP'
+         MEXIT ,
+.ERR07   MNOTE 8,'*** ZLISTEN CMD=/ALIAS= specification is invalid'
+         MEXIT ,
+.ERR08   MNOTE 8,'*** ZLISTEN Invalid EXEC= operand specified'
+         MEXIT ,
+.ERR09   MNOTE 8,'*** ZLISTEN Invalid ABTERM= operand specified'
+         MEXIT ,
+.ERR10   MNOTE 8,'*** ZLISTEN &DUP mutually exclusive with EXEC=SRB'
+         MEXIT ,
+.ERR11   MNOTE 8,'*** ZLISTEN Mutually exclusive operands specified'
+         MEXIT ,
+.ERR12   MNOTE 8,'*** ZLISTEN Invalid SOM= operand specified'
+         MEXIT ,
+.ERR13   MNOTE 8,'*** ZLISTEN Invalid system event specified'
+         MEXIT ,
+.ERR14   MNOTE 8,'*** ZLISTEN PERSIST=IPL not allowed w/&DUP parameter'
+         MEND

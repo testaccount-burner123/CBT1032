@@ -1,0 +1,988 @@
+XPCENF   CSECT
+*/********************************************************************/
+*/*                                                                  */
+*/* Name:        XPCENF                                              */
+*/*                                                                  */
+*/* Function:    Event Notification Facility signal router           */
+*/*                                                                  */
+*/* Description: Receives control from ENF to process a system       */
+*/*              event signal.                                       */
+*/*                                                                  */
+*/* Input Regs:  R0  signal code                                     */
+*/*              R1  parmlist address                                */
+*/*              R13 savearea address                                */
+*/*              R14 return address                                  */
+*/*              R15 entry point address                             */
+*/*                                                                  */
+*/* Regs Usage:  R7  ZENF address                                    */
+*/*              R9  ZRWA address                                    */
+*/*              R10 base address                                    */
+*/*              R11 ZXVT address                                    */
+*/*              R12 DSA  address                                    */
+*/*              R13 savearea address                                */
+*/*                                                                  */
+*/* Output Regs: R13 savearea address                                */
+*/*              R14 return address                                  */
+*/*                                                                  */
+*/* Attributes:  TCB-mode                                            */
+*/*              Primary mode                                        */
+*/*              Supervisor state                                    */
+*/*              Caller PSW key                                      */
+*/*              Page-fixed                                          */
+*/*              Write-protected                                     */
+*/*              Dynamic-LPA resident                                */
+*/*                                                                  */
+*/* Copyright:   Ben Marino. 2021 - 2022 (unpublished)               */
+*/*                                                                  */
+*/********************************************************************/
+*---------------------------CHANGE LOG--------------------------------*
+*                                                                     *
+* ID    Rel    Date       Author        Comments                      *
+*---------------------------------------------------------------------*
+* @01 | V1R1 | 12072021 | Ben Marino  | Initial version               *
+*     |      |          |             |                               *
+***********************************************************************
+*--------+---------+---------+---------+---------+---------+---------+*
+XPCENF   AMODE 31
+XPCENF   RMODE ANY
+         COPY  ZZGBL
+         USING XPCENF,R15              Entry
+         STM   R14,R12,GPR@R14(R13)    save caller's regs
+         B     ENF0000                 branch
+         ZZMAC GEN=MID,DSECT=NO        module ID
+*
+ENF0000  DS    0H
+         DROP  R15
+         LR    R10,R15                 base
+         USING XPCENF,R10              addressability
+         LR    R7,R1                   parmlist
+         USING ZENF,R7                 set addressability
+         LR    R4,R0                   copy signal code
+         XR    R11,R11                 ZXVT is not available
+*
+**       Locate ZXPC server instance
+*
+         USING PSA,0
+         L     R3,FLCCVT               CVT
+         USING CVT,R3
+         L     R3,CVTMSER              MSAS base
+         USING BASE,R3
+         CLC   MIDMSAS,=CL4'ASXB'      MSAS=ASXB?
+         BE    ENF0010                 yes
+         ICM   R3,15,BAMTVTCB          IEEVIPL common TCB?
+         BZ    ENF0010                 no
+         CLC   MIDMSAS,=CL4'BASE'      MSAS=BASE?
+         BE    ENF0020                 yes
+         L     R2,=AL4(RSN312)         set RSN
+         B     ENFABEND                ABEND
+*
+ENF0010  DS    0H
+         L     R3,BAASCB               MSAS ASCB
+         USING ASCB,R3
+         L     R3,ASCBASXB             ASXB
+         USING ASXB,R3
+         L     R3,ASXBFTCB             IEEVIPL TCB
+*
+ENF0020  DS    0H
+         USING TCB,R3
+         ICM   R11,15,TCBFSA           ZXVT init?
+         BNZ   ENF0030                 yes
+         L     R2,=AL4(RSN352)         RSN
+         B     ENFABEND                ABEND
+         DROP  R3
+*
+ENF0030  DS    0H
+         USING ZXVT,R11
+         CLC   ZXVTID,=CL4'ZXVT'       valid indeed?
+         BE    ENF0040                 yes
+         L     R2,=AL4(RSN356)         RSN
+         B     ENFABEND                ABEND
+*
+**       Obtain dynamic storage area
+*
+ENF0040  DS    0H
+         IPK   ,                       caller key
+         LR    R5,R2                   protect key
+         ZZTRC ENF=0,MID=MIDNAME,MOD=XPCENF
+         SPKA  X'80'(0)                problem key
+         STORAGE OBTAIN,LOC=ANY,CALLRKY=YES,                           +
+               LENGTH=DSA@SIZE,SP=130,LINKAGE=SYSTEM
+         SPKA  0(0)                    supervisor key
+         LR    R12,R1
+         USING DSA,R12                 set addressability
+         LA    R3,DSA@SIZE             DSA size
+         LR    R2,R1                   copy address
+         XR    R15,R15                 zero
+         MVCL  R2,R14                  scrub DSA
+         ST    R13,GPR@BWD(,R1)        chain
+         ST    R1,GPR@FWD(,R13)        save,
+         LR    R13,R1                  areas.
+         ST    R4,DSASIGNL             save signal code
+         ST    R5,DSACKEY              save caller key
+         MVC   DSAPARM1,ZENFPAR1       copy signal data address
+         MVC   DSAPARM3,ZENFPAR3       copy ZLISTEN token
+         MVC   DSAPARM5,ZENFPAR5       parmlist mapped by IEFENFSG
+         ZZTRC ENF=1,SWKEY=NO          trace
+         DROP  R7
+*
+**       Establish listener recovery
+*
+         LA    R9,DSAZRWA              ZRWA address
+         USING ZRWA,R9                 set addressability
+         MVC   ZRWAID,=CL4'ZRWA'       ID
+         MVC   ZRWALMOD,MIDNAME        listener module
+         MVC   ZRWASECT,MIDNAME        listener control section
+         L     R3,XPCRTM               recovery routine
+         BSM   R3,0                    set AMODE
+         MVC   DSAESTAE(ESTAEL),ESTAE  listform
+         ESTAE (3),                                                    +
+               PARAM=(9),              DRWA address                    +
+               TOKEN=DSATOKN,          store token here                +
+               MF=(E,DSAESTAE)
+         LTR   R15,R15                 successful?
+         BZ    ENF0050                 yes
+         ZZTRC ENF=2,SWKEY=NO          trace
+         B     ENFEXIT                 exit
+*
+**       Activate listener recovery
+*
+ENF0050  DS    0H
+         ST    R11,ZRWAZXVT            init ZXVT address
+         OI    DSAFLG1,DSA@STAE        recovery established
+         MVC   ZRWASUBN,ZXVTSUBN       init ZXPC server
+         MVC   DSARSN,=AL4(RSN356)     RSN
+         ZZRETRY ENFEXIT,RSN=DSARSN    activate recovery
+         ZZTRC ENF=3,SWKEY=NO          trace
+*
+**       Update listener entry count
+*
+ENF0060  DS    0H
+         L     R2,ZXVTENFC             listeners count
+         LA    R3,1(,R2)               add one
+         CS    R2,R3,ZXVTENFC          update count
+         BNE   ENF0060                 changed: try again
+*
+**       Call signal code listeners
+*
+         LA    R5,ENFTABLE             listener table
+         USING ENF,R5                  set addressability
+         ZZTRC ENF=4,SWKEY=NO          trace
+*
+**       Call signal owner delete routine
+*
+         ZZCALL SR=OWNZXRE             call owner routine
+         ZZTRC ENF=5,SWKEY=NO          trace
+*
+ENF0070  DS    0H
+         CLC   ENFENTY,ENFTEND         end of table?
+         BE    ENFEXIT                 yes, exit
+         CLC   ENFCODE,DSASIGNL        signal code match?
+         BE    ENF0099                 yes
+         LA    R5,ENF@SIZE(,R5)        next ENF entry
+         ZZTRC ENF=6,SWKEY=NO          trace
+         B     ENF0070                 loop
+*
+ENF0099  DS    0H
+         MVC   DSAELEN,ENFMLEN         copy signal code length
+         ZZCALL SR=LISTEN              call listener routine
+         ZZTRC ENF=7,SWKEY=NO          trace
+         DROP  R5
+*---------------------------------------------------------------------*
+*        Exit Routine                                                 *
+*--------+---------+---------+---------+---------+---------+---------+*
+ENFEXIT  DS    0H
+         TM    DSAFLG1,DSA@STAE        recovery active?
+         BZ    ENFXIT00                no
+         ESTAE 0,TOKEN=DSATOKN         deactivate recovery
+         ZZTRC ENF=8,SWKEY=NO          trace
+*
+ENFXIT00 DS    0H
+         L     R13,GPR@BWD(,R13)       caller savearea
+         SPKA  X'80'(0)                problem key
+         STORAGE RELEASE,COND=NO,CALLRKY=YES,                          +
+               ADDR=(12),LENGTH=DSA@SIZE,SP=130,LINKAGE=SYSTEM
+*
+ENFXIT99 DS    0H
+         L     R2,DSACKEY              caller key
+         SPKA  0(R2)                   switch key
+         LM    R14,R12,GPR@R14(R13)    restore caller's regs
+         XR    R15,R15                 RC
+         BR    R14                     return
+*---------------------------------------------------------------------*
+*        ABEND Exit                                                   *
+*--------+---------+---------+---------+---------+---------+---------+*
+ENFABEND DS    0H
+         ABEND 2022,DUMP,REASON=(2)    ABEND
+*---------------------------------------------------------------------*
+*        Constants                                                    *
+*--------+---------+---------+---------+---------+---------+---------+*
+         DS    0F
+XPCRTM   DC    V(XPCRTM)               XPCRTM
+ESTAE    ESTAE 0,MF=L                  listform
+ESTAEL   EQU   *-ESTAE
+*---------------------------------------------------------------------*
+*        ENF listener routine table                                   *
+*--------+---------+---------+---------+---------+---------+---------+*
+ENFTABLE DS    0F
+         ZZTAB GEN=ENF,TYPE=INITIAL
+*
+**       ICSF initialization and termination
+*
+         ZZTAB GEN=ENF,                                                +
+               TYPE=ENTRY,                                             +
+               CODE=19,                signal code                     +
+               DATA=4                  4-byte parameter
+*
+**       System information returned by CSRSI service
+*
+         ZZTAB GEN=ENF,                                                +
+               TYPE=ENTRY,                                             +
+               CODE=20,                signal code                     +
+               DATA=SIV1V2V3_LEN       data length (CSRSIIDF)
+*
+**       System or operator varied device online
+*
+         ZZTAB GEN=ENF,                                                +
+               TYPE=ENTRY,                                             +
+               CODE=23,                signal code                     +
+               DATA=EVALLEN            data length (IEFEVARY)
+*
+**       System or operator varied device offline
+*
+         ZZTAB GEN=ENF,                                                +
+               TYPE=ENTRY,                                             +
+               CODE=24,                signal code                     +
+               DATA=EVALLEN            data length (IEFEVARY)
+*
+**       System or operator unloaded DASD or tape volume
+*
+         ZZTAB GEN=ENF,                                                +
+               TYPE=ENTRY,                                             +
+               CODE=25,                signal code                     +
+               DATA=EUNLLEN            data length (IEZEUNLD)
+*
+**       Dynamic device reconfiguration (DDR) swap occurred
+*
+         ZZTAB GEN=ENF,                                                +
+               TYPE=ENTRY,                                             +
+               CODE=28,                signal code                     +
+               DATA=8                  8-byte parameter
+*
+**       The system or operator placed device in offline status
+*
+         ZZTAB GEN=ENF,                                                +
+               TYPE=ENTRY,                                             +
+               CODE=29,                signal code                     +
+               DATA=EVALLEN            data length (IEFEVARY)
+*
+**       The system or operator placed device online
+*
+         ZZTAB GEN=ENF,                                                +
+               TYPE=ENTRY,                                             +
+               CODE=30,                signal code                     +
+               DATA=EVALLEN            data length (IEFEVARY)
+*
+**       Device path configuration change
+*
+         ZZTAB GEN=ENF,                                                +
+               TYPE=ENTRY,                                             +
+               CODE=31,                signal code                     +
+               DATA=DCCDHLEN           data length (IOSDDCCD)
+*
+**       Configuration change was successful
+*
+         ZZTAB GEN=ENF,                                                +
+               TYPE=ENTRY,                                             +
+               CODE=32,                signal code                     +
+               DATA=DCCDHLEN           data length (IOSDDCCD)
+*
+**       Device was added or deleted from the configuration
+*
+         ZZTAB GEN=ENF,                                                +
+               TYPE=ENTRY,                                             +
+               CODE=33,                signal code                     +
+               DATA=DACH_LEN           data length (IOSDDACH)
+*
+**       An XES or XCF event occurred
+*
+         ZZTAB GEN=ENF,                                                +
+               TYPE=ENTRY,                                             +
+               CODE=35,                event code                      +
+               DATA=IXCYENFSYSTEMSYSPLEXDATA_LEN (IXCYENF)
+*
+**       System wrote a record to LOGREC dataset
+*
+         ZZTAB GEN=ENF,                                                +
+               TYPE=ENTRY,                                             +
+               CODE=36,                signal code                     +
+               DATA=IFBENF36_HEADER_LENGTH         (IFBENF36)
+*
+**       An SMF accounting related event occurred
+*
+         ZZTAB GEN=ENF,                                                +
+               TYPE=ENTRY,                                             +
+               CODE=37,                signal code                     +
+               DATA=26                 map error   (IFAENF37)
+*
+**       An automatic restart manager (ARM) event occurred
+*
+         ZZTAB GEN=ENF,                                                +
+               TYPE=ENTRY,                                             +
+               CODE=38,                signal code                     +
+               DATA=AREN@SZE           data length (IXCYAREN)
+*
+**       JES2 subsystem completed initialization or termination
+*
+         ZZTAB GEN=ENF,                                                +
+               TYPE=ENTRY,                                             +
+               CODE=40,                signal code                     +
+               DATA=ENF40_SIZE         data length (IEFENF40)
+*
+**       A workload management (WLM) event occurred
+*
+         ZZTAB GEN=ENF,                                                +
+               TYPE=ENTRY,                                             +
+               CODE=41,                signal code                     +
+               DATA=ENF41@SZ           data length (IWMRENF1)
+*
+**       Workload management sampled address space info available
+*
+         ZZTAB GEN=ENF,                                                +
+               TYPE=ENTRY,                                             +
+               CODE=43,                signal code                     +
+               DATA=4                  4-byte parameter
+*
+**       Coupling facility configuration change occurred
+*
+         ZZTAB GEN=ENF,                                                +
+               TYPE=ENTRY,                                             +
+               CODE=44,                signal code                     +
+               DATA=IXLYCFSE_LEN       data length  (IXLYCFSE)
+*
+**       SMSVSAM server address space was initialized or reinitialized
+*
+         ZZTAB GEN=ENF,                                                +
+               TYPE=ENTRY,                                             +
+               CODE=45,                signal code                     +
+               DATA=ADYENF_LEN         data length (IDAENF45)
+*
+**       UNIX System Services has been initialized or reinitialized
+*
+         ZZTAB GEN=ENF,                                                +
+               TYPE=ENTRY,                                             +
+               CODE=46,                signal code                     +
+               DATA=0                  no parameter
+*
+**       DAE completed or suppressed dumps threshold reached
+*
+         ZZTAB GEN=ENF,                                                +
+               TYPE=ENTRY,                                             +
+               CODE=47,                signal code                     +
+               DATA=ADYENF_LEN         data length (ADYENF)
+*
+**       Status change has occurred within system logger
+*
+         ZZTAB GEN=ENF,                                                +
+               TYPE=ENTRY,                                             +
+               CODE=48,                signal code                     +
+               DATA=IXGENF_LEN         data length (IXGENF)
+*
+**       Logrec recording medium has been changed by SETLOGRC command
+*
+         ZZTAB GEN=ENF,                                                +
+               TYPE=ENTRY,                                             +
+               CODE=49,                signal code                     +
+               DATA=IFBNT_LOGREC_LEN data length (IFBNTASM)
+*
+**       GRS resource contantion or change event occurred
+*
+         ZZTAB GEN=ENF,                                                +
+               TYPE=ENTRY,                                             +
+               CODE=51,                signal code                     +
+               DATA=ENF51C_LEN         data length (ISGE51CN)
+*
+**       LNKLST set has been activated via SETPROG command
+*
+         ZZTAB GEN=ENF,                                                +
+               TYPE=ENTRY,                                             +
+               CODE=52,                signal code                     +
+               DATA=DLENF_LEN          data length (CSVDLENF)
+*
+**       Sysplex Timer (ETR) configuration change occurred
+*
+         ZZTAB GEN=ENF,                                                +
+               TYPE=ENTRY,                                             +
+               CODE=53,                signal code                     +
+               DATA=8                  8-byte parameter
+*
+**       System resource manager (SRM) evet occurred
+*
+         ZZTAB GEN=ENF,                                                +
+               TYPE=ENTRY,                                             +
+               CODE=55,                signal code                     +
+               DATA=ENF55_Len          data length (IRAENF55)
+*
+**       Workload manager has changed an attribute of a job
+*
+         ZZTAB GEN=ENF,                                                +
+               TYPE=ENTRY,                                             +
+               CODE=56,                signal code                     +
+               DATA=WLMENF56_LEN       data length (IWMRENF2)
+*
+**       State of a workload mgmt scheduling environment has changed
+*
+         ZZTAB GEN=ENF,                                                +
+               TYPE=ENTRY,                                             +
+               CODE=57,                signal code                     +
+               DATA=WLMENF57_LEN       data length (IWMENF57)
+*
+**       The state of a SYSOUT data set has changed
+*
+         ZZTAB GEN=ENF,                                                +
+               TYPE=ENTRY,                                             +
+               CODE=58,                signal code                     +
+               DATA=ENF58_MAXSIZE      data length (IAZENF58)
+*
+**       TRACE TT command has been accepted
+*
+         ZZTAB GEN=ENF,                                                +
+               TYPE=ENTRY,                                             +
+               CODE=60,                signal code                     +
+               DATA=TTRENF60_LEN       data length (ITZENF60)
+*
+**       The capacity of the MVS image or CEC has changed
+*
+         ZZTAB GEN=ENF,                                                +
+               TYPE=ENTRY,                                             +
+               CODE=61,                signal code                     +
+               DATA=WLMENF61_LEN       data length (IWMENF61)
+*
+**       RACF SETROPTS RACLIST command changed in-storage profiles
+*
+         ZZTAB GEN=ENF,                                                +
+               TYPE=ENTRY,                                             +
+               CODE=62,                signal code                     +
+               DATA=ENFP_LENGTH        data length (IRRPENFP)
+*
+**       Permanent error was detected on a HyperSwap capable device
+*
+         ZZTAB GEN=ENF,                                                +
+               TYPE=ENTRY,                                             +
+               CODE=63,                signal code                     +
+               DATA=E63R_LEN           data length (IOSDE63R)
+*
+**       The capacity of a storage volume has changed
+*
+         ZZTAB GEN=ENF,                                                +
+               TYPE=ENTRY,                                             +
+               CODE=64,                signal code                     +
+               DATA=Enf64_Length       data length (IECENF64)
+*
+**       System REXX event has occurred
+*
+         ZZTAB GEN=ENF,                                                +
+               TYPE=ENTRY,                                             +
+               CODE=65,                signal code                     +
+               DATA=0                  no map
+*
+**       Health Checker for z/OS events change occurred
+*
+         ZZTAB GEN=ENF,                                                +
+               TYPE=ENTRY,                                             +
+               CODE=67,                signal code                     +
+               DATA=Enf067_Len         data length (HZSZENF)
+*
+**       BCPii hardware event has occurred
+*
+         ZZTAB GEN=ENF,                                                +
+               TYPE=ENTRY,                                             +
+               CODE=68,                signal code                     +
+               DATA=0                  no map
+*
+**       State of job (batch, STC or TSU) owned by JES has changed
+*
+         ZZTAB GEN=ENF,                                                +
+               TYPE=ENTRY,                                             +
+               CODE=70,                signal code                     +
+               DATA=ENF70_SIZE1        data length (IAZENF70)
+*
+**       RACF command changed user group connections event
+*
+         ZZTAB GEN=ENF,                                                +
+               TYPE=ENTRY,                                             +
+               CODE=71,                signal code                     +
+               DATA=IRR_ENF2_Length    data length (IRRPENF2)
+*
+**       SMS Volume status information
+*
+         ZZTAB GEN=ENF,                                                +
+               TYPE=ENTRY,                                             +
+               CODE=72,                signal code                     +
+               DATA=0                  no data
+*
+**       The SETLOAD, IEASYM command has completed successfully
+*
+         ZZTAB GEN=ENF,                                                +
+               TYPE=ENTRY,                                             +
+               CODE=73,                signal code                     +
+               DATA=0                  no data
+*
+**       State of job (batch, STC or TSU) has changed
+*
+         ZZTAB GEN=ENF,                                                +
+               TYPE=ENTRY,                                             +
+               CODE=78,                signal code                     +
+               DATA=ENF78_FIXED_SIZE data length (IAZENF78)
+*
+**       RACF command modified a profile event occurred
+*
+         ZZTAB GEN=ENF,                                                +
+               TYPE=ENTRY,                                             +
+               CODE=79,                signal code                     +
+               DATA=IRR_ENF3_Header_Length         (IRRPENF3)
+*
+         ZZTAB GEN=ENF,TYPE=FINAL
+*
+ENF@TSZE EQU   *-ENFTABLE
+         DS    0F
+ENFTEND  DC    AL4(-1)                 end-of-table marker
+*---------------------------------------------------------------------*
+*        Literals                                                     *
+*--------+---------+---------+---------+---------+---------+---------+*
+         LTORG ,
+         DROP  ,
+*/********************************************************************/
+*/*                                                                  */
+*/* Name:        LISTEN                                              */
+*/*                                                                  */
+*/* Function:    ENF event listener processing routine               */
+*/*                                                                  */
+*/* Input Regs:  R9  ZRWA address                                    */
+*/*              R10 base address                                    */
+*/*              R11 ZXVT address                                    */
+*/*              R12 DSA  address                                    */
+*/*              R13 savearea address                                */
+*/*              R15 Entry address                                   */
+*/*                                                                  */
+*/* Regs Usage:  R6  ZASY address                                    */
+*/*              R7  ZXSA address                                    */
+*/*              R8  ZXRE address                                    */
+*/*              R9  ZRWA address                                    */
+*/*              R10 base address                                    */
+*/*              R11 ZXVT address                                    */
+*/*              R12 DSA  address                                    */
+*/*              R13 savearea address                                */
+*/*                                                                  */
+*/* Output Regs: R15 Return code                                     */
+*/*              R0  Reason code                                     */
+*/*                                                                  */
+*/********************************************************************/
+*/-------+---------+---------+---------+---------+---------+---------*/
+LISTEN   DS    0H
+         USING DSA,R12
+         B     12(,R15)
+LISTNID  DC    CL8'LISTEN'             ID
+         STM   R14,R12,GPR@R14(R13)    save regs
+         LR    R10,R15                 base address
+         USING LISTEN,R10              base addressability
+         LA    R1,DSASBSA              routine savearea
+         ST    R13,GPR@BWD(,R1)        chain,
+         ST    R1,GPR@FWD(,R13)        save,
+         LR    R13,R1                  areas.
+*
+**       Establish addressability
+*
+         USING PSA,0
+         USING ZRWA,R9
+         USING ZXVT,R11
+         LA    R6,DSAZASY              ZASY address
+         USING ZASY,R6                 set addressability
+         XC    ZASY(ASY@CLR),ZASY      zero ZASY
+         MVC   ASYID,=CL4'ZASY'        ID ZASY
+         LA    R7,DSAZXSA              ZXSA address
+         USING ZXSA,R7                 set addressability
+         MVC   XSAID,=CL4'ZXSA'        ID
+         MVC   ZRWASECT,LISTNID        ID
+*
+**       Activate recovery
+*
+         MVC   DSARSN,=AL4(RSN360)     set RSN
+         ZZRETRY LISTNXIT,RSN=DSARSN   set retry address
+         ZZTRC ENF=A,SWKEY=NO,MID=LISTNID,MOD=XPCENF
+*
+**       Locate ENF ZXRE entry
+*
+         XR    R8,R8
+         L     R3,ZXVTENFQ             ZXRE queue
+         CS    R8,R3,ZXVTENFQ          listeners queued?
+         BZ    LISTNXIT                no, exit
+         USING ZXRE,R8                 set addressability
+         ZZTRC ENF=B,SWKEY=NO          trace
+         B     LISTN10                 scan queue
+*
+LISTN00  DS    0H
+         ICM   R8,15,XRECHPTR          last entry?
+         BZ    LISTNXIT                yes, exit
+         XC    ZASY(ASY@CLR),ZASY      zero ZASY
+         MVC   ASYID,=CL4'ZASY'        ID ZASY
+         XC    ASYXENFD,ASYXENFD       zero event data
+         XC    ASYXENSG,ASYXENSG       zero signal data
+         MVC   ASYEVENT,ZXVTBLKS       clear trigger data
+         ZZTRC ENF=C,SWKEY=NO          trace
+*
+LISTN10  DS    0H
+         CLC   XREID,=CL4'ZXRE'        valid entry?
+         BE    LISTN20                 yes
+         ZZTRC ENF=D,SWKEY=NO          trace
+         B     LISTNXIT                exit
+*
+LISTN20  DS    0H
+         TM    XREFLAG1,XRE@OFFQ       disabled?
+         BNZ   LISTN00                 yes, next entry
+         CLC   XRETOKEN,DSAPARM3       ZLISTEN token match?
+         BE    LISTN30                 yes, test further
+         ZZTRC ENF=E,SWKEY=NO          trace
+         B     LISTN00                 next entry
+*
+LISTN30  DS    0H
+         CLC   XRESIGNL,DSASIGNL       signal code match?
+         BE    LISTN40                 yes
+         ZZTRC ENF=F,SWKEY=NO          trace
+         B     LISTN00                 next entry
+*
+**       Initialize trigger environment
+*
+LISTN40  DS    0H
+         XC    ZXSA(XSA@SIZE),ZXSA
+         MVC   XSAID,=CL4'ZXSA'        ID
+         ST    R6,XSAZASY              ZASY
+         ST    R8,XSAZXRE              ZXRE
+         LA    R1,DSAZXSA2             XSA2
+         ST    R1,XSAZXSA2             set XSA2
+         ZZCALL ZXSA,EP=ASYTRG
+         LTR   R15,R15                 trigger match?
+         BZ    LISTN50                 yes
+         ZZTRC ENF=G,SWKEY=NO          trace
+         B     LISTN00                 next entry
+*
+**       Inititialize listener environment
+*
+LISTN50  DS    0H
+         XC    ZXSA(XSA@SIZE),ZXSA
+         MVC   XSAID,=CL4'ZXSA'        ID
+         ST    R6,XSAZASY              ZASY
+         ST    R8,XSAZXRE              ZXRE
+         LA    R1,DSAZXSA2             XSA2
+         ST    R1,XSAZXSA2             set XSA2
+         ZZCALL ZXSA,EP=ASYRUN
+         LTR   R15,R15                 initialized?
+         BZ    LISTN60                 yes
+         ZZTRC ENF=H,SWKEY=NO          trace
+         B     LISTN00                 next entry
+*
+**       Extract system event data
+*
+LISTN60  DS    0H
+         XC    ASYXENFD,ASYXENFD       zero event data
+         XC    ASYXENSG,ASYXENSG       zero signal data
+         ICM   R3,15,DSAELEN           signal data length?
+         BNZ   LISTN70                 yes
+         ZZTRC ENF=I,SWKEY=NO          trace
+         B     LISTN90                 carry on
+*
+LISTN70  DS    0H
+         CL    R3,=AL4(ASYX@ENZ)       GT ASYXENFD?
+         BNH   LISTN80                 no
+         LA    R3,ASYX@ENZ             ASYXENFD move what fits
+         ZZTRC ENF=J,SWKEY=NO          trace
+*
+LISTN80  DS    0H
+         L     R2,DSAPARM1             signal data address
+         BCTR  R3,0                    decrement for EX
+         EX    R3,COPYDATA             copy signal data
+         L     R2,DSAPARM5             signal data address
+         MVC   ASYXENSG(ENSG@SZE),0(R2) copy signal data
+         ZZTRC ENF=K,SWKEY=NO          trace
+*
+**       Schedule ENF listener routine
+*
+LISTN90  DS    0H
+         XC    ZXSA(XSA@SIZE),ZXSA
+         MVC   XSAID,=CL4'ZXSA'        ID
+         ST    R6,XSAZASY              ZASY
+         ST    R8,XSAZXRE              ZXRE
+         LA    R1,DSAZXSA2             XSA2
+         ST    R1,XSAZXSA2             set XSA2
+         ZZCALL ZXSA,EP=ASYSCH
+         LTR   R15,R15                 listener scheduled?
+         BNZ   LISTN99                 no
+         ZZTRC ENF=L,SWKEY=NO          trace
+         B     LISTN00                 next entry
+*
+LISTN99  DS    0H
+         ZZTRC ENF=M,SWKEY=NO          trace
+         B     LISTN00                 no, next entry
+*
+LISTNXIT DS    0H
+         L     R13,GPR@BWD(,R13)       mainline savearea
+         LM    R15,R1,DSAOPAR          output regs
+         LM    R2,R12,GPR@R2(R13)      restore regs
+         L     R14,GPR@R14(,R13)       return address
+         BR    R14                     return
+*---------------------------------------------------------------------*
+*        EXecuted Instructions                                        *
+*--------+---------+---------+---------+---------+---------+---------+*
+         DS    0H
+COPYDATA MVC   ASYXENFD(*-*),0(R2)     copy event signsl data
+*---------------------------------------------------------------------*
+*        Constants/Literals                                           *
+*--------+---------+---------+---------+---------+---------+---------+*
+         LTORG ,
+         DROP  ,
+*/********************************************************************/
+*/*                                                                  */
+*/* Name:        OWNZXRE                                             */
+*/*                                                                  */
+*/* Function:    ENF signal owner delete routine                     */
+*/*                                                                  */
+*/* Input Regs:  R9  ZRWA address                                    */
+*/*              R10 base address                                    */
+*/*              R11 ZXVT address                                    */
+*/*              R12 DSA  address                                    */
+*/*              R13 savearea address                                */
+*/*              R15 Entry address                                   */
+*/*                                                                  */
+*/* Regs Usage:  R7  ZXSA address                                    */
+*/*              R8  ZXRE address                                    */
+*/*              R9  ZRWA address                                    */
+*/*              R10 base address                                    */
+*/*              R11 ZXVT address                                    */
+*/*              R12 DSA  address                                    */
+*/*              R13 savearea address                                */
+*/*                                                                  */
+*/* Output Regs: R15 Return code                                     */
+*/*              R0  Reason code                                     */
+*/*                                                                  */
+*/********************************************************************/
+*/-------+---------+---------+---------+---------+---------+---------*/
+OWNZXRE  DS    0H
+         USING DSA,R12
+         B     12(,R15)
+OWNZID   DC    CL8'OWNZXRE'            ID
+         STM   R14,R12,GPR@R14(R13)    save regs
+         LR    R10,R15                 base address
+         USING OWNZXRE,R10             base addressability
+         LA    R1,DSASBSA              routine savearea
+         ST    R13,GPR@BWD(,R1)        chain,
+         ST    R1,GPR@FWD(,R13)        save,
+         LR    R13,R1                  areas.
+*
+**       Establish addressability
+*
+         USING PSA,0
+         USING ZRWA,R9
+         USING ZXVT,R11
+         LA    R7,DSAZXSA              ZXSA address
+         USING ZXSA,R7                 set addressability
+         MVC   XSAID,=CL4'ZXSA'        ID
+*
+**       Activate recovery
+*
+         MVC   DSARSN,=AL4(RSN388)     set RSN
+         ZZRETRY OWNZXIT,RSN=DSARSN    set retry address
+         ZZTRC ENF=@,SWKEY=NO,MID=OWNZID,MOD=XPCENF
+*
+**       Locate ENF signal owner ZXRE
+*
+         XR    R8,R8
+         L     R3,ZXVTENFQ             ZXRE queue
+         CS    R8,R3,ZXVTENFQ          listeners queued?
+         BZ    OWNZXIT                 no
+         USING ZXRE,R8                 set addressability
+         B     OWNZ010                 carry on
+*
+OWNZ000  DS    0H
+         ICM   R8,15,XRECHPTR          last entry?
+         BZ    OWNZXIT                 yes, exit
+*
+OWNZ010  DS    0H
+         CLC   XREID,=CL4'ZXRE'        valid entry?
+         BNE   OWNZXIT                 no, exit
+         ZZTRC ENF=#,SWKEY=NO          trace
+*
+**       Issue ENFREQ ACTION=DELETE call
+*
+         TM    XREFLAG1,XRE@OWNR       signal owner?
+         BZ    OWNZ000                 no, next signal owner
+         TM    XREFLAG1,XRE@ENFD       delete required?
+         BZ    OWNZ000                 no, next signal owner
+         XC    ZXSA(XSA@SIZE),ZXSA
+         MVC   XSAID,=CL4'ZXSA'
+         MVC   XSAPARM,XRESIGNL        init signal code
+         ST    R8,XSAZXRE              init owner ZXRE
+         ZZCALL ZXSA,EP=ENFCHLD        locate child ZXRE
+         ST    R15,DSARC               save RC
+         LTR   R15,R15                 any children?
+         BNZ   OWNZ000                 yes, next signal owner
+         L     R2,XRESIGNL             event code
+         L     R3,XRETKENF             delete token
+         MVC   DSAPLST(ZENFREQL),ZENFREQ
+         ENFREQ ACTION=DELETE,CODE=(2),DTOKEN=(3),                     +
+               MF=(E,DSAPLST)
+         NIL   XREFLAG1,XFF-XRE@ENFD,REF=XREFLAGS
+         ZZTRC ENF=$,SWKEY=NO          trace
+         B     OWNZ000                 next signal owner
+*
+OWNZXIT  DS    0H
+         L     R13,GPR@BWD(,R13)       mainline savearea
+         LM    R15,R1,DSAOPAR          output regs
+         LM    R2,R12,GPR@R2(R13)      restore regs
+         L     R14,GPR@R14(,R13)       return address
+         BR    R14                     return
+*---------------------------------------------------------------------*
+*        Constants/Literals                                           *
+*--------+---------+---------+---------+---------+---------+---------+*
+         DS    0F
+ZENFREQ  ENFREQ ACTION=DELETE,CODE=*-*,MF=L
+ZENFREQL EQU   *-ZENFREQ
+         LTORG ,
+         DROP  ,
+*---------------------------------------------------------------------*
+*        Dynamic Storage Area                                         *
+*--------+---------+---------+---------+---------+---------+---------+*
+DSA      DSECT ,
+DSASAVE  DS    18F                     savearea
+DSASBSA  DS    18F                     subroutine savearea
+         DS    0X
+DSAFLG1  DS    XL1                     flags
+DSA@STAE EQU   X'80'                   recovery indicator
+DSA@RV1  EQU   X'40'                   -available
+DSA@RV2  EQU   X'20'                   -available
+DSA@RV3  EQU   X'10'                   -available
+DSA@RV4  EQU   X'08'                   -available
+DSA@RV5  EQU   X'04'                   -available
+DSA@RV6  EQU   X'02'                   -available
+DSA@RV7  EQU   X'01'                   -available
+         DS    0X
+DSAFLGX  DS    XL1                     -available
+DSAXASID DS    XL2                     XASID
+         DS    0F
+DSAOPAR  DS    0F                      output parms
+DSARC    DS    F                       -1. R15
+DSARSN   DS    F                       -2. R0
+DSAGR1   DS    F                       -3. R1
+DSA@OPAL EQU   *-DSAOPAR               keep it together
+         DS    0F
+DSACKEY  DS    F                       caller key
+DSATOKN  DS    F                       ESTAE token
+DSAXASCB DS    A                       XASCB
+DSASIGNL DS    F                       ENF signal code
+ENFPTR   DS    F                       needed by ENFREQ macro
+DSAELEN  DS    F                       ENF signal data length
+DSAPARM1 DS    F                       ENF signal data address
+DSAPARM3 DS    F                       ZLISTEN token value
+DSAPARM5 DS    F                       ENF signal data address
+         DS    0D
+DSASTOKN DS    XL8                     STOKEN
+DSAXSTKN DS    XL8                     XSTOKEN
+DSATTOKN DS    XL16                    TTOKEN
+         DS    0F
+DSAESTAE DS    CL(ESTAEL)              ESTAE listform
+         DS    0F
+DSAZASY  DS    CL(ASY@SIZE)            ZASY entry
+         DS    0F
+DSAZXSA  DS    CL(XSA@SIZE)            ZXSA entry
+         DS    0F
+DSAZXSA2 DS    CL(XSA@SIZE)            XSA2 entry
+         DS    0F
+DSAZRWA  DS    CL(ZRWA@SZE)            ZRWA recovery workarea
+DSAZRWAL EQU   *-DSAZRWA               ZRWA workarea size
+         DS    0C
+DSAEVENT DS    CL(XRE@DATA)            event data
+DSAESLCK DS    CL1                     slack byte
+         DS    0F
+DSAPLST  DS    XL128                   parmlist
+         DS    0D
+DSA@SIZE EQU   *-DSA                   size of DSA
+*---------------------------------------------------------------------*
+*        ENF Parameter List                                           *
+*--------+---------+---------+---------+---------+---------+---------+*
+ZENF     DSECT ,
+ZENFPAR1 DS    F                       signal data address
+ZENFPAR2 DS    F                       zero
+ZENFPAR3 DS    F                       ZLISTEN token value
+ZENFPAR4 DS    F                       zero
+ZENFPAR5 DS    F                       parmlist mapped by IEFENFSG
+ZENFPAR6 DS    F                       zero
+ZENF@PLS EQU   *-ZENF
+*---------------------------------------------------------------------*
+*        Server Data Areas                                            *
+*--------+---------+---------+---------+---------+---------+---------+*
+         PRINT NOGEN
+         ZZXVT ,
+         ZZXRE ,
+         ZZASY ,
+         ZZXSA ,
+         ZZRWA ,
+         ZZEQU ,
+         ZZTAB GEN=ENF,DSECT=YES
+         ZZMAC GEN=MID,ID=XID,DSECT=YES
+*---------------------------------------------------------------------*
+*        System data areas                                            *
+*--------+---------+---------+---------+---------+---------+---------+*
+         PRINT NOGEN
+         IHAPSA ,
+         IHAASCB ,
+         IHAASXB ,
+         IHAASSB ,
+         IKJTCB ,
+         CVT   DSECT=YES
+         IEEBASEA ,
+         IEFJSSOB ,
+         IEFENFCT ,
+         IEFENFPM ,
+*
+**       Supported ENF signal codes
+*
+         IEFENFSG ,      ENF signal data map
+ENSG@SZE EQU *-ENSG
+*
+         CSRSIIDF SIV1V2V3=YES ENFcode = 20
+         IEFEVARY ,        ENFcode = 23, 24 29, 30
+         IEZEUNLD ,        ENFcode = 25
+         IOSDDCCD ,        ENFcode = 31, 32
+         IOSDDACH ,        ENFcode = 33
+         IXCYENF ,         ENFcode = 35
+         IFBENF36 ,        ENFcode = 36
+*
+         IXCYAREN ,        ENFcode = 38
+AREN@SZE EQU *-AREN      IXCYAREN data size
+         IEFENF40 ,        ENFcode = 40
+*
+         IWMRENF1 ,        ENFcode = 41
+ENF41@SZ EQU *-WLMENF1   IWMRENF1 data size
+*
+         IXLYCFSE ,        ENFcode = 44
+         IDAENF45 ,        ENFcode = 45
+         ADYENF ,          ENFcode = 47
+         IXGENF ,          ENFcode = 48
+         IFBNTASM ,        ENFcode = 49
+         ISGE51CN ,        ENFcode = 51
+         CSVDLENF ,        ENFcode = 52
+         IRAENF55 ,        ENFcode = 55
+         IWMRENF2 ,        ENFcode = 56
+         IWMENF57 ,        ENFcode = 57
+         IAZENF58 ,        ENFcode = 58
+         ITZENF60 ,        ENFcode = 60
+         IWMENF61 ,        ENFcode = 61
+         IRRPENFP ,        ENFcode = 62
+*
+         IOSDE63R LIST=YES ENFcode = 63
+E63R_LEN EQU *-E63R      IOSDE63R data size
+         IECENF64 ,        ENFcode = 64
+         HZSZENF ,         ENFcode = 67
+         IAZENF70 ,        ENFcode = 70
+         IRRPENF2 ,        ENFcode = 71
+         IAZENF78 ,        ENFcode = 78
+         IRRPENF3 ,        ENFcode = 79
+         END

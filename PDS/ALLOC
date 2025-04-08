@@ -1,0 +1,30 @@
+//ALLOCJOB JOB ...
+//*
+//*---------------------------------------------------------*/
+//*                                                         */
+//* ZXPC Server data sets allocation job                    */
+//*                                                         */
+//* This JCL allocates the data sets required to install    */
+//* the ZXPC Server.                                        */
+//*                                                         */
+//* 1. Change hlq SYS1 as required by your installation.    */
+//* 2. Change VOL=SER as required by your installation.     */
+//*                                                         */
+//*---------------------------------------------------------*/
+//*
+//ALLOC   EXEC PGM=IEFBR14
+//ASMLIB   DD  DSN=SYS1.ZXPC.SOURCE,
+//             DISP=(,CATLG),
+//             UNIT=SYSDA,
+//             VOL=SER=??????,         <----------
+//             SPACE=(TRK,(128,64,16)),
+//             DCB=(LRECL=80,RECFM=FB,BLKSIZE=6160,DSORG=PO)
+//*
+//OBJLIB   DD  DSN=SYS1.ZXPC.OBJLIB,
+//             DISP=(,CATLG),
+//             UNIT=SYSDA,
+//             VOL=SER=??????,         <----------
+//             SPACE=(TRK,(512,256,32)),
+//             DCB=(LRECL=80,RECFM=FB,BLKSIZE=3120,DSORG=PO)
+/*
+//

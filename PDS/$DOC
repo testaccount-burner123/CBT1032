@@ -1,0 +1,402 @@
+************************************************************************
+*                                                                      *
+*  Ben Marino's ZXPC System Events Server API                          *
+*                                                                      *
+*   Retired Senior Software Engineer, IT Architect                     *
+*                                                                      *
+*                                                                      *
+*  ZXPC INTRODUCTION:                                                  *
+*  -----------------                                                   *
+*   The ZXPC server is a service provider that allows your programs    *
+*   to monitor MVS system events. You can use it as an auditing tool,  *
+*   or use it to monitor and react to system resources usage on behalf *
+*   of the entire system, or on behalf of selected address spaces.     *
+*                                                                      *
+*   As a sysprog, one of your tasks is to keep your systems running    *
+*   smoothly. This means you listen, manage and ensure that your       *
+*   applications and subsystems are running efficiently. You can       *
+*   accomplish some of these tasks by using the services provided      *
+*   by the ZXPC Server.                                                *
+*                                                                      *
+*                                                                      *
+*  WHERE DOES ZXPC LIVE?                                               *
+*  --------------------                                                *
+*   The ZXPC server does not require its own address space.            *
+*   There is no JCL procedure needed to start it.                      *
+*   You implement it by issuing the SETSSI ADD,SUB=ZXPC MVS command    *
+*   or at IPL time by predefined SUBSYS SUBNAME(ZXPC) records in       *
+*   PARMLIB member IEFSSNxx.                                           *
+*                                                                      *
+*                                                                      *
+*  ZXPC ARCHITECTURE:                                                  *
+*  -----------------                                                   *
+*   ZXPC lives in the dynamic-LPA and its services are invoked by      *
+*   macros that issue stacking-PC calls. Most services can be used     *
+*   by authorized programs only. Some services can be used by any      *
+*   program, including those that run without APF-authorization or     *
+*   in problem program state with a non-zero PSW key.                  *
+*                                                                      *
+*   The ZXPC server is fully re-entrant. To provide integrity, it's    *
+*   loaded in page-protected storage. And it's page-fixed to provide   *
+*   better performance.                                                *
+*                                                                      *
+*   The ZXPC server consists of three load modules:                    *
+*                                                                      *
+*    ZXPCINI - Server initialization load module                       *
+*    ZXPCSRV - Common server components load module                    *
+*    ZXPCTST - System events listener program example                  *
+*                                                                      *
+*   ZXPCSRV contains the following components:                         *
+*                                                                      *
+*    XPCSRV - stacking-PC service router                               *
+*    XPCCMD - Command (MGCR/E) event listener                          *
+*    XPCDB2 - Db2 event listener                                       *
+*    XPCENF - Event Notification Facility (ENF) event listener         *
+*    XPCSOM - Start-of-Memory (SOM) event listener                     *
+*    XPCEOM - End-of-memory (EOM) event listener                       *
+*    XPCSOT - Start-of-Task (SOT) event listener                       *
+*    XPCEOT - End-of-task (EOT) event listener                         *
+*    XPCSVC - Supervisor call event listener                           *
+*    XPCWTO - Message (WTO/R) event listener                           *
+*    XPCXCF - Cross-system Coupling Facility (XCF) event listener      *
+*                                                                      *
+*   The ZXPCSRV module functions as a stacking-PC service router.      *
+*   The stacking-PC environment is created at initialization time      *
+*   by module, ZXPCINI, using the following MVS service calls:         *
+*                                                                      *
+*    AXEXT  - Extract Current Authorization Index                      *
+*    AXSET  - Set Authorized Authorization Index                       *
+*    LXRES  - Reserve System Linkage Index                             *
+*    ETDEF  - Define Entry Table Entry                                 *
+*    ETCRE  - Create Entry Table Descriptor                            *
+*    ETCON  - Connect SLX to Entry Table                               *
+*    AXSET  - Restore Extracted Authorization Index                    *
+*                                                                      *
+*   The LXRES MVS service call reserves a System Linkage Index (SLX).  *
+*   The SLX is required to make the stacking-PC routine available to   *
+*   all address spaces.                                                *
+*                                                                      *
+*   The ETCON MVS service request is issued to connect the entry       *
+*   table with the SLX. This causes MVS to connect the entry table     *
+*   to the linkage table of every address space in the system, both    *
+*   present and future.                                                *
+*                                                                      *
+*                                                                      *
+*  STACKING-PC ANCHOR:                                                 *
+*  ------------------                                                  *
+*   The ASXB and TCB control blocks by MVS design resides in the LSQA. *
+*   For the Master Scheduler address Space, the ASXB and the IEEVIPL   *
+*   jobstep task TCB created by NIP during the IPL process, reside in  *
+*   the read/write nucleus. NIP initializes word TCBFSA of the IEEVIPL *
+*   TCB to zero and it remains initialized to zero for the life of the *
+*   IPL.                                                               *
+*                                                                      *
+*   The ZXPC server initialization process takes advantage of this     *
+*   design to anchor its common ZXVT control table into the TCBFSA     *
+*   word of the IEEVIPL TCB. This allows service calls issued by       *
+*   programs running in any address space to locate the stacking-PC    *
+*   number required to invoke the desired service.                     *
+*                                                                      *
+*   If you wish to change the stacking-PC anchor to use a persistent   *
+*   system-level token, or other method, change source member, ZZMAC,  *
+*   at label GENXPC.                                                   *
+*                                                                      *
+*                                                                      *
+*   MACRO CALL EXAMPLE:                                                *
+*   ------------------                                                 *
+*                                                                      *
+*        ZLISTEN CMD=*,            when any MVS command is issued,     *
+*              LMOD=PGMNAME,       execute this listener routine.      *
+*              MF=E(,PLIST)                                            *
+*                                                                      *
+*   MACRO CALL EXPANSION:                                              *
+*   --------------------                                               *
+*                                                                      *
+*   +    LAE   1,PLIST                                                 *
+*   +    MVI   XREEVENT-XRE(1),C'*'                                    *
+*   +    MVC   XREELMOD-XRE(8,1),PGMNAME                               *
+*   +    L     14,X'010'(0,0)      CVT                                 *
+*   +    L     14,X'094'(14,0)     MSER                                *
+*   +    L     14,X'0B4'(14,0)     IEEVIPL                             *
+*   +    L     14,X'070'(14,0)     ZXVT                                *
+*   +    L     14,X'008'(14,0)     PC number                           *
+*   +    PC    0(14)               XPCSRV service router               *
+*                                                                      *
+*                                                                      *
+*  LISTENER ROUTINES:                                                  *
+*  -----------------                                                   *
+*   The ZXPC server allows your programs to listen for the occurrence  *
+*   of specific system events. When the system event triggers, your    *
+*   listener routine receives control.                                 *
+*   To listen for a specific system event, use the ZLISTEN macro to    *
+*   specify:                                                           *
+*                                                                      *
+*   - The system event type                                            *
+*   - The listener routine that is to be given control                 *
+*   - Parameter data that listener routine receives                    *
+*   - Listener routine persistance                                     *
+*   - Listener routine execution mode                                  *
+*   - Where the listener routine executes                              *
+*                                                                      *
+*  To stop listening for a system event, use the ZLISTEN with the      *
+*  DELETE option and specify the token returned in register 1 by       *
+*  the ZLISTEN macro call that created the listen request.             *
+*  See the ZLISTEN macro for complete syntax and coding examples.      *
+*                                                                      *
+*                                                                      *
+*  WHERE DOES THE LISTENER ROUTINE RUN?                                *
+*  -----------------------------------                                 *
+*   When a system event that you are listening for triggers, your      *
+*   listener routine, depending on parameters you specify on the       *
+*   ZLISTEN service macro, executes in:                                *
+*                                                                      *
+*   RB-MODE where the system event triggered.                          *
+*    For all system event types, your listener routine has access      *
+*    to the live system event data and runs synchronously under the    *
+*    same task and in the same addrss space where the event triggers.  *
+*    For SSI system events, if you wish, you can alter the system      *
+*    event data. For example:                                          *
+*                                                                      *
+*    - Alter WTO message text                                          *
+*    - Delete WTO message                                              *
+*    - Alter routing and descriptor codes                              *
+*    - Alter command operands                                          *
+*    - Restrict the command                                            *
+*                                                                      *
+*   RB-MODE under a different task of the same or different            *
+*      address space.                                                  *
+*      For all system event types, your listener routine receives      *
+*      a copy of the system event data and cannot modify it. Your      *
+*      listener routine runs asynchronously under the specified        *
+*      task and selected address space.                                *
+*                                                                      *
+*   SRB-MODE in the same or different address space.                   *
+*       For all system event types, your listener routine receives     *
+*       a copy of the system event data and cannot modify it. Your     *
+*       listener routine runs in SRB-mode in the specified address     *
+*       space.                                                         *
+*                                                                      *
+*  LISTENER ROUTINE CODE EXAMPLES:                                     *
+*  ------------------------------                                      *
+*   See SOURCE(XPCTST) for listener routine code examples.             *
+*                                                                      *
+*                                                                      *
+*  USE CASES:                                                          *
+*  ---------                                                           *
+*   - Monitor real and auxiliary storage shortages                     *
+*   - Monitor system-related started tasks                             *
+*   - Monitor systems joining and leaving the sysplex                  *
+*   - Monitor WTO messages and automatically reply to WTORs            *
+*   - Monitor Event Notification Facility (ENF) events                 *
+*   - Monitor security server access violations                        *
+*   - Monitor issued system and subsystems commands                    *
+*   - Monitor Db2 subsystems activity sysplex-wide                     *
+*   - Monitor XCF coupling facility member activity                    *
+*   - Obtain and release private virtual storage in subpools 0-127     *
+*     outside the primary address space.                               *
+*   - Copy data from one address space to another without using        *
+*     common SQA/CSA virtual storage buffers                           *
+*   - Add/delete load modules to/from the dynamic-LPA                  *
+*                                                                      *
+*                                                                      *
+*  SERVICE MACROS:                                                     *
+*  --------------                                                      *
+*   ZXPC provides the following macros that you can use to invoke      *
+*   the desired service:                                               *
+*                                                                      *
+*   ZLISTEN  SYSTEM EVENTS LISTENER FACILITY:                          *
+*            Define a listener routine that receives control when      *
+*            a specified system event occurs. The listener routine     *
+*            can execute under the TCB and address space where the     *
+*            event occurs, under a different TCB or under a TCB of     *
+*            different address space.                                  *
+*                                                                      *
+*   ZDYNLPA  DYNAMIC-LPA FACILITY:                                     *
+*            Add/delete modules to/from dynamic-LPA. The module can    *
+*            be added in pageable or fixed storage and page protected  *
+*            storage.                                                  *
+*                                                                      *
+*   ZPROT    VIRTUAL STORAGE VALIDATION FACILITY:                      *
+*            The TPROT instruction does not distinguish between a      *
+*            valid and invalid storage address. When the referenced    *
+*            page is swapped out, TPROT sets translation not available *
+*            condition code 3.                                         *
+*                                                                      *
+*            ZPROT handles what TPROT does not. It validates a storage *
+*            address by determining if the storage key and PSW key     *
+*            match. ZPROT switches to the caller's PSW key and does    *
+*            fetch and store into the page. An invalid fetch and store *
+*            is handled by its FRR routine. ZPROT sets a return code   *
+*            in register 15 that indicates the result of the storage   *
+*            validation test as follows:                               *
+*                                                                      *
+*            00 - fetch and store permitted                            *
+*            04 - 0C4-4  Protection Exception                          *
+*            08 - 0C5-5  Addressing Exception                          *
+*            12 - 0C4-10 Segment Translation Exception                 *
+*            16 - 0C4-11 Page Translation Exception                    *
+*                                                                      *
+*   ZGETMEM  STORAGE MANAGEMENT FACILITY:                              *
+*            Obtain private storage outside the primary address space  *
+*            by simply specifying the STOKEN, JOBname, STCname, or     *
+*            TSUname of the target address space.                      *
+*                                                                      *
+*   ZFREMEM  STORAGE MANAGEMENT FACILITY:                              *
+*            Release private storage outside the primary address space *
+*            by simply specifying the STOKEN, JOBname, STCname, or     *
+*            TSUname of the target address space.                      *
+*                                                                      *
+*   ZCOPY    DATA COPY FACILITY:                                       *
+*            Copy data across address spaces without the use of        *
+*            SQA/CSA storage buffers by simply specifying the STOKEN,  *
+*            JOBname, STCname or TSUname of the target address space.  *
+*                                                                      *
+*   ZAUTH    AUTHORIZATION FACILITY:                                   *
+*            Change jobstep authorization to allow you to issue the    *
+*            MODESET supervisor call without suffering S047 ABENDs.    *
+*                                                                      *
+*                                                                      *
+*  INITIALIZATION:                                                     *
+*  --------------                                                      *
+*   The ZXPC server initialization routine, ZXPCINI, must reside in    *
+*   SYS1.LINKLIB or LPALIB. It executes in task-mode in the Master     *
+*   Scheduler Address Space (MSAS) and performs the following steps    *
+*   to initialize the server environment:                              *
+*                                                                      *
+*   - Parse and implement initialization parameters                    *
+*   - Initialize common ZXVT vector table in subpool 245               *
+*   - Delete previous instance ZXPCSRV module from Dynamic-LPA         *
+*   - Add current instance ZXPCSRV module to Dynamic-LPA               *
+*   - Set authorized authorization index                               *
+*   - Reserve System Linkage Index                                     *
+*   - Define Entry Table Entry                                         *
+*   - Create Entry Table Descriptor                                    *
+*   - Connect LX to Entry Table                                        *
+*   - Publish stacking-PC number                                       *
+*                                                                      *
+*                                                                      *
+*  INITIALIZATION PARAMETERS:                                          *
+*  -------------------------                                           *
+*   SRV={module} Specifies the ZXPC PC routine router load module      *
+*                name. If not specified, the default is SRV=ZXPCSRV.   *
+*                ZXPCSRV contains all the ZXPC server PC routines.     *
+*                The load module is added to the dynmaic-LPA using     *
+*                the MVS CSVDYLPA service request. The module is       *
+*                loaded in page-fixed and write-protected storage.     *
+*                                                                      *
+*   SAF={class}  Specifies the RACF resource class that ZXPC will      *
+*                use when making security authorization checks.        *
+*                If not specified the default is SAF=XPCCLASS.         *
+*                                                                      *
+*                Specify SAF=NOCALL to bypass security checks.         *
+*                CAUTION: Use of SAF=NOCALL allows unauthorized        *
+*                         personnel access to these PC calls which     *
+*                         if used inappropriately may compromise       *
+*                         system integrity.                            *
+*                                                                      *
+*   CMP={NO|YES} Specifies if WTO message text compression is active   *
+*                or inactive. CMP=NO does not compress the message     *
+*                text. CMP=YES removes message text duplicate blanks.  *
+*                If not specified the default is CMP=YES.              *
+*                                                                      *
+*   CON={NO|YES} Specifies if the SETCON MN,JOBNAMES=(ON,LOG)          *
+*                command should be internally issued to allow the      *
+*                ZXPC server to listen for monitored messages.         *
+*                If not specified the default is CON=NO.               *
+*                                                                      *
+*   DMP={NO|YES} Specifies if SVC dumps should be taken to report      *
+*                abnormal termination errors. DMP=YES dumps service    *
+*                requests that terminate abnormally.                   *
+*                                                                      *
+*   ENQ={NO|YES} Specifies the ENQ/DEQ serialization option.           *
+*                ENQ=YES issues shared ENQ on major SYSIEFSD with      *
+*                minor of Q10. ENQ=NO bypasses serialization when      *
+*                scanning the CSCB control block chain.                *
+*                If not specified the default is ENQ=NO.               *
+*                                                                      *
+*   SUP={NO|YES} Specifies if listener routines are allowed to         *
+*                receive control in supervisor state and PSW key 0.    *
+*                SUP=NO, the default, gives control to triggered       *
+*                listener routines in problem state with PSW key 8.    *
+*                                                                      *
+*   TRC={ON|OFF} Specifies if internal PC call tracing is ON or OFF.   *
+*                TRC=ON activates internal traceing and issues WTO     *
+*                messages XPC016I and XPC017I. TRC=OFF deactivates     *
+*                tracing. If not specified the default is TRC=OFF.     *
+*                                                                      *
+*   UID=userID   Specifies the testing environment TSO userID.         *
+*                In conjunction with option MODE=TEST, it allows you   *
+*                to only trap system events that are triggered by jobs *
+*                and started tasks submitted by the specified user.    *
+*                                                                      *
+*   MODE={PROD|TEST}                                                   *
+*                Specifies the ZXPC server execution mode.             *
+*                When MODE=TEST is specified, system events are only   *
+*                triggered on behalf of jobs, STCs, submitted by the   *
+*                TSO user specified by the UID=userID initialization   *
+*                option. If not specified, the default is MODE=PROD.   *
+*                                                                      *
+*                                                                      *
+*  SERVER SECURITY:                                                    *
+*  ---------------                                                     *
+*   When external security is activated by specifying, SAF=XPCCLASS,   *
+*   the ZXPC server caller must have READ authority to profile         *
+*   ZXPC.API.AUTH in RACF class, XPCCLASS.                             *
+*   Refer to ZXPCRACF for security implementation details.             *
+*                                                                      *
+*                                                                      *
+*  SERVER COMMANDS:                                                    *
+*  ---------------                                                     *
+*   The ZXPC server allows you to issue commands that display          *
+*   or alter server initialization options.                            *
+*                                                                      *
+*   Command Security:                                                  *
+*    When external security is activated by specifying, SAF=XPCCLASS,  *
+*    the ZXPC command issuer must have READ authority to profile,      *
+*    ZXPC.CMD.AUTH in RACF class, XPCCLASS.                            *
+*    Refer to ZXPCRACF for security implementation details.            *
+*                                                                      *
+*   Display commands:                                                  *
+*    ZXPC DIAG         - display diagnostic data                       *
+*    ZXPC OPTIONS      - display server options                        *
+*    ZXPC STATUS       - display server status                         *
+*    ZXPC TRACE        - display internal server trace data            *
+*                                                                      *
+*   Alter commands:                                                    *
+*    ZXPC ACTIVATE     - Activates the ZXPC server                     *
+*    ZXPC CMP=NO       - deactivate ZXPC message compression           *
+*    ZXPC CMP=YES      - activate ZXPC message compression             *
+*    ZXPC DEACTIVATE   - Deactivates the ZXPC server                   *
+*    ZXPC DMP=NO       - take SVC dumps during ABEND recovery          *
+*    ZXPC DMP=YES      - skip SVC dumps during ABEND recovery          *
+*    ZXPC SAF=NOCALL   - bypass security server calls                  *
+*    ZXPC SAF=class    - enforce service caller authorization          *
+*    ZXPC TRC=ON       - activate server tracing                       *
+*    ZXPC TRC=OFF      - deactivate server tracing                     *
+*    ZXPC TRACE=CLEAR  - Clears stand-alone trace data crumbs          *
+*                                                                      *
+*                                                                      *
+*  CODE UPDATES:                                                       *
+*  ------------                                                        *
+*   If you reassemble and relink the ZXPC server and don't want to     *
+*   wait for a system IPL for the new changes to take effect, you      *
+*   can delete and then add the ZXPC server as follows:                *
+*                                                                      *
+*   1. Assemble and link ZXPC server                                   *
+*   2. SETSSI DELETE,SUB=ZXPC,FORCE                                    *
+*   3. MODIFY LLA,REFRESH                                              *
+*   4. SETSSI ADD,SUB=ZXPC,I=ZXPCINI,P='SRV=ZXPCSRV'                   *
+*                                                                      *
+*                                                                      *
+*  CONTACT ME:                                                         *
+*   Feel free to contact me if you have questions.                     *
+*                                                                      *
+*   Ben Marino                                                         *
+*   Retired Senior Software Engineer, IT Architect                     *
+*                                                                      *
+*   719.271.1344                                                       *
+*   b2marino@outlook.com                                               *
+*   linkedin.com/in/ben-marino-40887915                                *
+*   https://allthingszos4.webnode.page                                 *
+*                                                                      *
+************************************************************************

@@ -1,0 +1,136 @@
+.*/*******************************************************************/
+.*/*                                                                 */
+.*/* Name:        ZZMAC                                              */
+.*/*                                                                 */
+.*/* Function:    ZXPC subsystem server environment macro            */
+.*/*                                                                 */
+.*/* Description: Generates the following macros:                    */
+.*/*                                                                 */
+.*/*              1. XPC   - Stacking PC call                        */
+.*/*              2. MID   - Module ID                               */
+.*/*              3. CNVX  - Hexadecimal data conversion             */
+.*/*              4. CNVD  - Decimal data conversion                 */
+.*/*                                                                 */
+.*/* Copyright:   Ben Marino. 2021 - 2022 (unpublished)              */
+.*/*                                                                 */
+.*/*******************************************************************/
+.*---------------------------CHANGE LOG-------------------------------*
+.*                                                                    *
+.* ID    Rel    Date       Author        Comments                     *
+.*--------------------------------------------------------------------*
+.* @01 | V1R1 | 12072021 | Ben Marino  | Initial version              *
+.*     |      |          |             |                              *
+.**********************************************************************
+.*-------+---------+---------+---------+---------+---------+---------+*
+         MACRO
+         ZZMAC &TARGET,&SOURCE,                                        +
+               &GEN=,&TR=ZXVTZCNV,&PCGR=14,                            +
+               &WRKREG=15,&DWORD=DSADWRD,&ID=MID,&SSI=NO,              +
+               &TID=,&XID=,&SWKEY=YES,&WREG=15,                        +
+               &DSECT=NO
+.*
+         AIF   ('&GEN' EQ 'XPC').GENXPC
+         AIF   ('&GEN' EQ 'MID').GENMID
+         AIF   ('&GEN' EQ 'CNVX').GENCNVX
+         AIF   ('&GEN' EQ 'CNVD').GENCNVD
+         MNOTE 8,'*** ZZMAC Invalid GEN= operand specified'
+         MEXIT ,
+.*/*******************************************************************/
+.*/*                                                                 */
+.*/* Name: XPC                                                       */
+.*/*                                                                 */
+.*/* Function: ZXPC stacking PC invokation                           */
+.*/*                                                                 */
+.*/* Notes: None                                                     */
+.*/*                                                                 */
+.*/*******************************************************************/
+.GENXPC  ANOP  ,
+         COPY  ZZGBL
+         AIF   ('&MSAS' EQ 'BASE').GENX00
+         AIF   ('&MSAS' EQ 'ASXB').GENX99
+         MNOTE 8,'*** XPC - Stacking PC generation error'
+         MEXIT ,
+.*
+.GENX00  ANOP  ,
+         L     &PCGR,X'010'(0,0)      .CVT
+         L     &PCGR,X'094'(&PCGR,0)  .MSER
+         L     &PCGR,X'0B4'(&PCGR,0)  .IEEVIPL TCB is in R/W nucleus
+         L     &PCGR,X'070'(&PCGR,0)  .ZXVT lives in ESQA
+         L     &PCGR,X'008'(&PCGR,0)  .SLX
+         PC    0(&PCGR)               .XPCSRV lives in dynamic-LPA
+         MEXIT ,
+.*
+.GENX99  ANOP  ,
+         L     &PCGR,X'010'(0,0)      .CVT
+         L     &PCGR,X'094'(&PCGR,0)  .MSER
+         L     &PCGR,X'064'(&PCGR,0)  .ASCB
+         L     &PCGR,X'06C'(&PCGR,0)  .IEEVIPL ASXB is in R/W nucleus
+         L     &PCGR,X'004'(&PCGR,0)  .IEEVIPL TCB is in R/W nucleus
+         L     &PCGR,X'070'(&PCGR,0)  .ZXVT lives in ESQA
+         L     &PCGR,X'008'(&PCGR,0)  .SLX
+         PC    0(&PCGR)               .XPCSRV lives in dynamic-LPA
+         MEXIT ,
+.*/*******************************************************************/
+.*/*                                                                 */
+.*/* Name: MID                                                       */
+.*/*                                                                 */
+.*/* Function: ZXPC module entry constants                           */
+.*/*                                                                 */
+.*/* Notes: None                                                     */
+.*/*                                                                 */
+.*/*******************************************************************/
+.GENMID  ANOP  ,
+         COPY  ZZGBL
+         AIF   ('&DSECT' EQ 'NO').MID00
+&ID      DSECT ,
+         DC    AL4(0)                 .STM instruction
+         DC    AL4(0)                 .B instruction
+.*
+.MID00   ANOP  ,
+         AIF   ('&SSI' EQ 'NO').MID10
+         DS    0F                     .
+&ID.SSI  DC    AL4(&SSI)              .SSVT address
+         AGO   .MID20
+.*
+.MID10   ANOP  ,
+         DS    0F                     .
+&ID.SSI  DC    AL4(-1)                .reserved high value
+.*
+.MID20   ANOP  ,
+&ID.NAME DC    CL8'&SYSECT'           .module name
+&ID.SUB  DC    CL4'&SUB'              .server name
+&ID.MSAS DC    CL4'&MSAS'             .PC environment
+&ID.REL  DC    CL8'&REL'              .release level
+&ID.APAR DC    CL8'&APAR'             .APAR number
+&ID.DATE DC    CL8'&SYSDATE'          .assembly date
+&ID.TIME DC    CL8'&SYSTIME'          .assembly time
+&ID.CPYR DC    CL40'&CPYRGHT'
+         SYSSTATE OSREL=ZOSV1R6
+         MEXIT ,
+.*/*******************************************************************/
+.*/*                                                                 */
+.*/* Name: CNVX                                                      */
+.*/*                                                                 */
+.*/* Function: Convert data to hexadecimal macro                     */
+.*/*                                                                 */
+.*/*******************************************************************/
+.GENCNVX ANOP  ,
+         UNPK  &TARGET.(L'&TARGET-1),&SOURCE
+         MVC   &TARGET+L'&TARGET-1(1),&SOURCE+L'&SOURCE-1
+         NI    &TARGET,X'0F'
+         MVZ   &TARGET+1(L'&TARGET-1),&TARGET
+         TR    &TARGET,&TR
+         MEXIT ,
+.*/*******************************************************************/
+.*/*                                                                 */
+.*/* Name: CNVD                                                      */
+.*/*                                                                 */
+.*/* Function: Convert data to decimal macro                         */
+.*/*                                                                 */
+.*/*******************************************************************/
+.GENCNVD ANOP  ,
+         L     &WRKREG,&SOURCE         .get data value
+         CVD   &WRKREG,&DWORD          .convert to decimal
+         OI    &DWORD+7,X'0F'          .fix sign
+         UNPK  &TARGET,&DWORD          .unpck it
+         MEND

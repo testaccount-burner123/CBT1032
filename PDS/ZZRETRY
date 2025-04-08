@@ -1,0 +1,80 @@
+         MACRO
+.*/*******************************************************************/
+.*/*                                                                 */
+.*/* Nane: ZZRETRY                                                   */
+.*/*                                                                 */
+.*/* Function:    ZXPC Recovery environment retry macro              */
+.*/*                                                                 */
+.*/* Description: Used by TCB-mode and SRB-mode routines             */
+.*/*              to set and reset retry points within a routine.    */
+.*/*                                                                 */
+.*/* Notes: None                                                     */
+.*/*                                                                 */
+.*/*******************************************************************/
+.*---------------------------CHANGE LOG-------------------------------*
+.*                                                                    *
+.* ID    Rel    Date       Author        Comments                     *
+.*--------------------------------------------------------------------*
+.* @01 | V1R1 | 12072021 | Ben Marino  | Initial version              *
+.*     |      |          |             |                              *
+.**********************************************************************
+.*-------+---------+---------+---------+---------+---------+---------+*
+         ZZRETRY &LABEL,                                               +
+               &SRV=,&RSN=,&WTO=YES,&SDUMP=YES,&EPA=10
+.*
+         LCLC  &NORTY
+&NORTY   SETC  'RTY'.'&SYSNDX'
+.*
+         AIF   ('&LABEL' EQ '').ERR01
+         AIF   ('&LABEL' EQ 'OFF').RTYOFF
+.*
+.RTY000  ANOP  ,
+         XC    ZRWAFLG1,ZRWAFLG1       .retry flags
+         AIF   ('&SRV' EQ '').RTY002
+         MVC   ZRWASECT,=CL8'&SRV'     .service routine
+         AGO   .RTY004
+.*
+.RTY002  ANOP  ,
+         MVC   ZRWASECT,4(&EPA)        .service routine
+.*
+.RTY004  ANOP  ,
+         AIF   ('&SDUMP' EQ 'YES').RTY005
+         AIF   ('&SDUMP' NE 'NO').ERR02
+         OI    ZRWAFLG1,ZRWA@NDP       .SDUMP=NO
+.*
+.RTY005  ANOP  ,
+         AIF   ('&WTO' EQ 'YES').RTY010
+         AIF   ('&WTO' NE 'NO').ERR03
+         OI    ZRWAFLG1,ZRWA@NWT       .WTO=NO
+.*
+.RTY010  ANOP  ,
+         AIF   ('&RSN' EQ '').RTY099
+         AIF   ('&RSN'(1,1) EQ '(').RTY015
+         MVC   ZRWARSN,&RSN            .set RSN
+         AGO   .RTY099
+.*
+.RTY015  ANOP  ,
+         ST    &RSN,ZRWARSN            .set RSN
+.*
+.RTY099  ANOP  ,
+         LA    15,&LABEL               .retry address
+         BSM   15,0                    .AMODE
+         ST    15,ZRWARTRY             .save address
+         STM   0,15,ZRWAGPRS           .save GPRs
+         STMH  0,15,ZRWAHGRS           .save high GPRs
+         STAM  0,15,ZRWAARS            .save ARs
+         MEXIT ,
+*
+.RTYOFF  ANOP  ,
+         XC    ZRWAFLG1,ZRWAFLG1       .clear flags
+         XC    ZRWARTRY,ZRWARTRY       .zero retry address
+         MEXIT ,
+.*
+.**      Macro Notes
+.*
+.ERR01   MNOTE 8,'*** RETRY - Retry address label specification error'
+         MEXIT ,
+.ERR02   MNOTE 8,'*** RETRY - SDUMP operand specification error'
+         MEXIT ,
+.ERR03   MNOTE 8,'*** RETRY - WTO operand specification error'
+         MEND  ,

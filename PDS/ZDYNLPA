@@ -1,0 +1,291 @@
+.*/*******************************************************************/
+.*/*                                                                 */
+.*/* NAME:                                                           */
+.*/*  ZDYNLPA                                                        */
+.*/*                                                                 */
+.*/* FUNCTION:                                                       */
+.*/*  Load/Delete module to/from Dynamic-LPA.                        */
+.*/*                                                                 */
+.*/* DESCRIPTION:                                                    */
+.*/*  Load modules to dynamic-LPA and delete modules from            */
+.*/*  dynamic-LPA.                                                   */
+.*/*                                                                 */
+.*/* ENVIRONMENT:                                                    */
+.*/*  TCB mode.                                                      */
+.*/*  Enabled for I/O and External interrupts.                       */
+.*/*  The caller must not be locked.                                 */
+.*/*                                                                 */
+.*/* SECURITY:                                                       */
+.*/*  When SAF=NOCALL is specified, security checks are bypassed.    */
+.*/*  When SAF=XPCCLASS is specified, the caller must have READ      */
+.*/*  authority to profile ZXPC.API.AUTH in resource class XPCCLASS. */
+.*/*                                                                 */
+.*/* PARAMETERS:                                                     */
+.*/* ADD                                                             */
+.*/*  A required parameter. ADD, adds a module to dynamic-LPA.       */
+.*/*  When the return code in register 15 is zero the entry point    */
+.*/*  address is returned in register 1 and an 8-byte token is       */
+.*/*  returned in field DYNTOKEN of the MF={E,listform).             */
+.*/*                                                                 */
+.*/* DELETE                                                          */
+.*/*  Deletes a module from dynamic-LPA. You can delete the module   */
+.*/*  by name or by token.                                           */
+.*/*                                                                 */
+.*/* MOD=                                                            */
+.*/*  Specifies the address of an 8-byte field that contains the     */
+.*/*  module name to be added or deleted. To code, specify the       */
+.*/*  RS-type address, or address in register (2)-(12).              */
+.*/*                                                                 */
+.*/* DDNAME=                                                         */
+.*/*  For ADD requests specifies a parameter that contains the       */
+.*/*  DDname of the library (or concatenation of libraries) from     */
+.*/*  which the module is to be loaded. If not specified, the        */
+.*/*  default is DDNAME=STEPLIB.                                     */
+.*/*                                                                 */
+.*/* PGFIX={NO|YES}                                                  */
+.*/*  Specifies if the module added to dynamic-LPA should be page    */
+.*/*  fixed (YES), or pageable (NO). The default is PGFIX=NO.        */
+.*/*                                                                 */
+.*/* OWNER={HOME|SYSTEM}                                             */
+.*/*  Specifies if the module added to dynamic-LPA is owned by the   */
+.*/*  home address space (HOME), or by the system (SYSTEM).          */
+.*/*  The default is OWNER=HOME.                                     */
+.*/*                                                                 */
+.*/* TYPE={TOKEN|CURRENT}                                            */
+.*/* {TOKEN}                                                         */
+.*/*  Deletes a module from dynamic-LPA by token. To code, specify   */
+.*/*  the RS-type address, or address in register (2)-(12).          */
+.*/*                                                                 */
+.*/* {CURRENT}                                                       */
+.*/*  Delets the module from dynamic-LPA by name. To code, specify   */
+.*/*  the address, or address in register (2)-(12).                  */
+.*/*                                                                 */
+.*/* TOKEN=                                                          */
+.*/*  Specifies the address of an 8-byte field that contains the     */
+.*/*  token to be used to delete the module. This token is returned  */
+.*/*  by CSVDYLPA ADD in field DYNTOKEN of the MF=(E,listform).      */
+.*/*                                                                 */
+.*/* MF={E|L}                                                        */
+.*/*  MF=E specifies the address of the MF=L listform.               */
+.*/*                                                                 */
+.*/* R15 - RETURN CODES:                                             */
+.*/*  00 - Dynamic-LPA completed successfully                        */
+.*/*  04 - CSVDYLPA warning return code                              */
+.*/*  08 - Dynamic-LPA add/delete failed                             */
+.*/*                                                                 */
+.*/* R0 - REASON CODES:                                              */
+.*/*  00000000 - Dynamic-LPA completed successfully                  */
+.*/*  00000008 - Invalid DYN structure detected                      */
+.*/*  00000012 - Unknown Dynamic-LPA request specified               */
+.*/*  00000401 - CSVDYLPA module not found                           */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* EXAMPLE 1:                                                      */
+.*/*                                                                 */
+.*/*  Add module pointed to by name in register 3 to dynamic-LPA.    */
+.*/*                                                                 */
+.*/*   ZDYNLPA ADD,MOD=(3),DDNAME=STEPLIB,MF=(E,PLIST)               */
+.*/*                                                                 */
+.*/*   PLIST  ZDYNLPA MF=L                                           */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* EXAMPLE 2:                                                      */
+.*/*                                                                 */
+.*/*  Delete current module pointed by name in register 2.           */
+.*/*                                                                 */
+.*/*   ZDYNLPA DELETE,MOD=(2),TYPE=CURRENT,MF=(E,PLIST)              */
+.*/*                                                                 */
+.*/*   PLIST  ZDYNLPA MF=L                                           */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* EXAMPLE 3:                                                      */
+.*/*                                                                 */
+.*/*  Delete module pointed to by 8-byte token in register 3.        */
+.*/*                                                                 */
+.*/*   ZDYNLPA DELETE,MOD=(2),TYPE=TOKEN,TOKEN=(3),MF=(E,PLIST)      */
+.*/*                                                                 */
+.*/*   PLIST  ZDYNLPA MF=L                                           */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* © Copyright Ben Marino. 2021 - 2022 (unpublished)               */
+.*/*                                                                 */
+.*/*******************************************************************/
+.*---------------------------CHANGE LOG-------------------------------*
+.*                                                                    *
+.* ID    Rel    Date       Author        Comments                     *
+.*--------------------------------------------------------------------*
+.* @01 | V1R1 | 12072021 | Ben Marino  | Initial version              *
+.*     |      |          |             |                              *
+.**********************************************************************
+.*-------+---------+---------+---------+---------+---------+---------+*
+         MACRO
+&DYN     ZDYNLPA &REQ,                                                 +
+               &MF=,                                                   +
+               &MOD=,                                                  +
+               &ADDR=,                                                 +
+               &TYPE=,                                                 +
+               &TOKEN=,                                                +
+               &LENGTH=,                                               +
+               &DDNAME=,                                               +
+               &PGFIX=NO,                                              +
+               &OWNER=HOME,                                            +
+               &DSECT=
+.*
+         COPY  ZZGBL
+.*
+         LCLC  &ZDY
+&ZDY     SETC  'ZDY'.'&SYSNDX'
+.*
+         AIF   ('&DSECT' EQ 'YES').YDSECT
+         AIF   ('&MF' EQ 'L').LIST
+         AIF   ('&MF(2)'(1,1) EQ '(').DYN000
+         LAE   1,&MF(2)                       .parmlist
+         AGO   .DYN005
+.*
+.DYN000  ANOP  ,
+         LAE   1,0&MF(2)                      .parmlist
+.*
+.DYN005  ANOP  ,
+         XC    0(DYN@SZE,1),0(1)              .clear listform
+         MVC   DYNID-DYN(4,1),=CL4'DYN'       .ID
+.*
+         AIF   ('&REQ' EQ 'ADD').ADD
+         AIF   ('&REQ' EQ 'DELETE').DELETE
+         AGO   .ERR02
+.*
+.**      Dynamic-LPA ADD Expansion
+.*
+.ADD     ANOP  ,
+         MVI   DYNREQ-DYN(1),DYN@ADD          .ADD request
+         AIF   ('&TOKEN' NE '').ERR07
+         AIF   ('&TYPE' NE '').ERR08
+         AIF   ('&MOD' EQ '').ERR01
+         AIF   ('&MOD'(1,1) EQ '(').ADD010
+         MVC   DYNMOD-DYN(8,1),&MOD           .init module name
+         AGO   .ADD020
+.*
+.ADD010  ANOP  ,
+         MVC   DYNMOD-DYN(8,1),0(&MOD)        .init module name
+.*
+.ADD020  ANOP  ,
+         AIF   ('&PGFIX' EQ 'NO').ADD025
+         AIF   ('&PGFIX' NE 'YES').ERR06
+         MVI   DYNPAGE-DYN(1),DYN@PGFX        .page fix module
+.*
+.ADD025  ANOP  ,
+         AIF   ('&OWNER' NE 'SYSTEM').ADD030
+         MVI   DYNOWNR-DYN(1),DYN@SYS         .OWNER=SYSTEM
+         AGO   .ADD035
+.*
+.ADD030  ANOP  ,
+         AIF   ('&OWNER' NE 'HOME').ERR11
+         MVI   DYNOWNR-DYN(1),DYN@HOME        .OWNER=HOME
+.*
+.ADD035  ANOP  ,
+         AIF   ('&DDNAME' EQ '').ADD050
+         AIF   ('&DDNAME'(1,1) EQ '(').ADD040
+         MVC   DYNDDN-DYN(8,1),=CL8'&DDNAME'  .init DDname
+         AGO   .DYNX99
+.*
+.ADD040  ANOP  ,
+         MVC   DYNDDN-DYN(8,1),0(&DDNAME)     .init DDname
+         AGO   .DYNX99
+.*
+.ADD050  ANOP  ,
+         MVC   DYNDDN-DYN(8,1),=CL8'STEPLIB'  .default DDname
+         AGO   .DYNX99
+.*
+.**      Dynamic-LPA DELETE Expansion
+.*
+.DELETE  ANOP  ,
+         AIF   ('&DDNAME' NE '').ERR10
+         AIF   ('&MOD' EQ '').ERR01
+         AIF   ('&MOD'(1,1) EQ '(').DELT10
+         MVC   DYNMOD-DYN(8,1),&MOD           .init module name
+         AGO   .DELT20
+.*
+.DELT10  ANOP  ,
+         MVC   DYNMOD-DYN(8,1),0(&MOD)        .init module name
+.*
+.DELT20  ANOP  ,
+         AIF   ('&TYPE' EQ 'TOKEN').DELT30
+         AIF   ('&TYPE' NE 'CURRENT').ERR0A
+         MVI   DYNREQ-DYN(1),DYN@CUR          .DELETE current instance
+         AGO   .DYNX99
+.*
+.DELT30  ANOP  ,
+         AIF   ('&TOKEN' EQ '').ERR05
+         MVI   DYNREQ-DYN(1),DYN@TKN          .DELETE by token
+         AIF   ('&TOKEN'(1,1) EQ '(').DELT40
+         MVC   DYNTOKEN-DYN(8,1),&TOKEN       .init token
+         AGO   .DYNX99
+.*
+.DELT40  ANOP  ,
+         MVC   DYNTOKEN-DYN(8,1),0(&TOKEN)    .init token
+.*
+.DYNX99  ANOP  ,
+         LAE   15,&DYNLPA                     .PCID
+         ZZMAC GEN=XPC                        .XPCSRV PC router
+         MEXIT ,
+.*
+.**      ZDYNLPA MF=L
+.*
+.YDSECT  ANOP  ,
+DYN      DSECT ,
+         AGO   .NDSECT
+.LIST    ANOP  ,
+&DYN     DS    0F
+DYN      DS    0F
+.NDSECT  ANOP  ,
+DYNID    DS    CL4'DYN'         ID
+DYNREQ   DS    XL1              request
+DYN@ADD  EQU   X'80'             -add request
+DYN@CUR  EQU   X'40'             -delete current
+DYN@TKN  EQU   X'20'             -delete by token
+         DS    0X
+DYNPAGE  DS    XL1              page attributes
+DYN@PGFX EQU   X'80'             -page fix module
+         DS    0X
+DYNOWNR  DS    XL1              owner attributes
+DYN@SYS  EQU   X'80'             -OWNER=SYSTEM
+DYN@HOME EQU   X'40'             -OWNER=HOME
+         DS    0X
+DYNREV0  DS    XL1              available
+         DS    0A
+DYNADDR  DS    A                module entry address
+DYNLEN   DS    A                module length
+DYNRC    DS    A                RC
+DYNRSN   DS    A                RSN
+DYNDDN   DS    CL8              library DDname
+DYNMOD   DS    CL8              module name
+DYNTOKEN DS    XL8              token
+DYNEND   DS    0D               align it
+DYN@SZE  EQU   *-DYN            DYN length
+         MEXIT ,
+.*
+.**      Macro Notes
+.*
+.ERR01   MNOTE 8,'*** ZDYNLPA Invalid MOD operand specified'
+         MEXIT ,
+.ERR02   MNOTE 8,'*** ZDYNLPA Invalid ADDR operand specified'
+         MEXIT ,
+.ERR04   MNOTE 8,'*** ZDYNLPA MOD and TOKEN are mutually exclusive'
+         MEXIT ,
+.ERR05   MNOTE 8,'*** ZDYNLPA Invalid TOKEN operand specified'
+         MEXIT ,
+.ERR06   MNOTE 8,'*** ZDYNLPA Invalid PGFIX operand specified'
+         MEXIT ,
+.ERR07   MNOTE 8,'*** ZDYNLPA ADD and TOKEN are mutually exclusive'
+         MEXIT ,
+.ERR08   MNOTE 8,'*** ZDYNLPA ADD and TYPE are mutually exclusive'
+         MEXIT ,
+.ERR09   MNOTE 8,'*** ZDYNLPA DELETE and DDNAME are mutually exclusive'
+         MEXIT ,
+.ERR10   MNOTE 8,'*** ZDYNLPA Invalid TYPE operand specified'
+         MEXIT ,
+.ERR11   MNOTE 8,'*** ZDYNLPA Invalid OWNER operand specified'
+         MEND

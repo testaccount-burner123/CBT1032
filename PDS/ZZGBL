@@ -1,0 +1,65 @@
+.*/*******************************************************************/
+.*/*                                                                 */
+.*/* Name: ZZGBL                                                     */
+.*/*                                                                 */
+.*/* Function: ZXPC subsystem server global definitions              */
+.*/*                                                                 */
+.*/* Notes: None                                                     */
+.*/*                                                                 */
+.*/* © Copyright Ben Marino. 2021 - 2022 (unpublished)               */
+.*/*                                                                 */
+.*/*                                                                 */
+.*/*******************************************************************/
+.*---------------------------CHANGE LOG-------------------------------*
+.*                                                                    *
+.* ID    Rel    Date       Author        Comments                     *
+.*--------------------------------------------------------------------*
+.* @01 | V1R1 | 12072021 | Ben Marino  | Initial version              *
+.*     |      |          |             |                              *
+.**********************************************************************
+.*-------+---------+---------+---------+---------+---------+---------+*
+.*
+.**      Module identifiers
+.*
+&REL     SETC  'V1R1M0'        .Version 1, Release 1, Modification 0
+&SUB     SETC  'ZXPC'          .server name
+&APAR    SETC  'APAR000'       .APAR number
+&MSAS    SETC  'BASE'          .MSAS{BASE|ASXB} system environment
+&CPYRGHT SETC  'Copyright: Ben Marino (Unpublished)'
+.*
+.**      PCID - PC routine routing codes
+.*
+&TPROT   SETC  '04'            .ZPROT
+&TPROT64 SETC  '08'            .ZPROT64
+&DYNLPA  SETC  '12'            .ZDYNLPA
+&AUTH    SETC  '16'            .ZAUTH
+&GETMEM  SETC  '20'            .ZGETMEM
+&FREMEM  SETC  '24'            .ZFREMEM
+&COPY    SETC  '28'            .ZCOPY
+&LISTEN  SETC  '32'            .ZLISTEN
+&LISTNDL SETC  '36'            .ZLISTEN DELETE
+&MODEL   SETC  '99'            .ZMODEL
+.*
+.**      Cell pool extents
+.*
+&ZXREPRI SETC  '32'            .ZXRE primary extent cells
+&ZXRESEC SETC  '64'            .ZXRE secondary extent cells
+.*
+.**      Address space type
+.*
+&TOKID   SETC  '1'             .STOKEN ID
+&JOBID   SETC  '2'             .{JOB=|XJOB=} ID
+&STCID   SETC  '3'             .{STC=|XSTC=} ID
+&TSUID   SETC  '4'             .{TSU=|XTSU=} ID
+.*
+.**      System event type
+.*
+&TEOM    SETA  80             .EOM
+&TCMD    SETA  40             .CMD
+&TWTO    SETA  20             .WTO
+&TENF    SETA  10             .ENF
+&TSOM    SETA  08             .SOM
+&TDB2    SETA  04             .DB2
+&TXCF    SETA  02             .XCF
+&TSVC    SETA  01             .SVC
+.*

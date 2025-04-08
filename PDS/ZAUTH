@@ -1,0 +1,87 @@
+.*/*******************************************************************/
+.*/*                                                                 */
+.*/* NAME:                                                           */
+.*/*  ZAUTH                                                          */
+.*/*                                                                 */
+.*/* FUNCTION:                                                       */
+.*/*  Set and reset unit of work authorization.                      */
+.*/*                                                                 */
+.*/* DESCRIPTION:                                                    */
+.*/*  Change jobstep task authorization by setting JSCBAUTH          */
+.*/*  bit on or off.                                                 */
+.*/*                                                                 */
+.*/* ENVIRONMENT:                                                    */
+.*/*  TCB mode.                                                      */
+.*/*  Enabled for I/O and External interrupts.                       */
+.*/*  LOCAL lock may be held but is not required.                    */
+.*/*                                                                 */
+.*/* SECURITY:                                                       */
+.*/*  When SAF=NOCALL is specified, security checks are bypassed.    */
+.*/*  When SAF=XPCCLASS is specified, the caller must have READ      */
+.*/*  authority to profile ZXPC.API.AUTH in resource class XPCCLASS. */
+.*/*                                                                 */
+.*/* PARAMETERS:                                                     */
+.*/* {ON|OFF}                                                        */
+.*/*  Specifies the requested JSCBAUTH change. ON, turns on the      */
+.*/*  JSCBAUTH bit. OFF, turns off the JSCBAUTH bit.                 */
+.*/*                                                                 */
+.*/* R15 - RETURN CODES:                                             */
+.*/*  00 - Request completed successfully                            */
+.*/*  08 - Request terminated abnormally                             */
+.*/*                                                                 */
+.*/* R0  - REASON CODES:                                             */
+.*/*  00000000 - Successful completion                               */
+.*/*  00000024 - Invalid authorization request specified             */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* EXAMPLE 1:                                                      */
+.*/*                                                                 */
+.*/*  Set JSCBAUTH authorization bit on.                             */
+.*/*   ZAUTH ON                                                      */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* EXAMPLE 2:                                                      */
+.*/*                                                                 */
+.*/*  Set JSCBAUTH authorization bit off.                            */
+.*/*   ZAUTH OFF                                                     */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* © Copyright Ben Marino. 2021 - 2022 (unpublished)               */
+.*/*                                                                 */
+.*/*******************************************************************/
+.*---------------------------CHANGE LOG-------------------------------*
+.*                                                                    *
+.* ID    Rel    Date       Author        Comments                     *
+.*--------------------------------------------------------------------*
+.* @01 | V1R1 | 12072021 | Ben Marino  | Initial version              *
+.*     |      |          |             |                              *
+.**********************************************************************
+.*-------+---------+---------+---------+---------+---------+---------+*
+         MACRO
+&ZID     ZAUTH &ID,&PCREG=14
+.*
+         COPY  ZZGBL
+.*
+         AIF   ('&ID' EQ 'ON').AUTHON
+         AIF   ('&ID' EQ 'OFF').AUTHOFF
+         AGO   .ERR01
+.*
+.AUTHON  ANOP  ,
+         LAE   0,1                     .authorize request
+         AGO   .AUTH99
+.*
+.AUTHOFF ANOP  ,
+         LAE   0,2                     .unauthorize request
+.*
+.AUTH99  ANOP  ,
+         LAE   15,&AUTH                .PCID
+         ZZMAC GEN=XPC                 .XPCSRV PC router
+         MEXIT ,
+.*
+.**      Macro Notes
+.*
+.ERR01   MNOTE 8,'*** ZAUTH - Invalid authorization request specified'
+         MEND

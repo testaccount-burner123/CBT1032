@@ -1,0 +1,68 @@
+.*/*******************************************************************/
+.*/*                                                                 */
+.*/* NAME: ZZRUN                                                     */
+.*/*                                                                 */
+.*/* Function:                                                       */
+.*/*  Failsafe testing ZXPC server macro                             */
+.*/*                                                                 */
+.*/* Description:                                                    */
+.*/*  This macro is invoked by ZXPC server components to protect     */
+.*/*  MVS system integrity. It allows you to only trap system        */
+.*/*  events that are triggered by a single TSO user and jobs        */
+.*/*  submitted by the user matching the user ID.                    */
+.*/*                                                                 */
+.*/* Testing:                                                        */
+.*/*  During server testing, you must implement ZXPC as follows:     */
+.*/*                                                                 */
+.*/*  SETSSI ADD,SUB=ZXPC,I=ZXPCINI,P='TRC=ON,MODE=TEST,UID=user'    */
+.*/*                                                                 */
+.*/*  Replace UID=user with your TSO user ID.                        */
+.*/*                                                                 */
+.*/*                                                                 */
+.*/* Production:                                                     */
+.*/*  When you're ready to implement the ZXPC server in production,  */
+.*/*  implement it as follows:                                       */
+.*/*                                                                 */
+.*/*  SETSSI ADD,SUB=ZXPC,I=ZXPCINI,P='MODE=PROD'                    */
+.*/*                                                                 */
+.*/*                                                                 */
+.*/* © Copyright Ben Marino. 2021 - 2022 (unpublished)               */
+.*/*                                                                 */
+.*/*******************************************************************/
+.*---------------------------CHANGE LOG-------------------------------*
+.*                                                                    *
+.* ID    Rel    Date       Author        Comments                     *
+.*--------------------------------------------------------------------*
+.* @01 | V1R1 | 12072021 | Ben Marino  | Initial version              *
+.*     |      |          |             |                              *
+.**********************************************************************
+.*-------+---------+---------+---------+---------+---------+---------+*
+         MACRO
+&ZID     ZZRUN &MODE=,&EXIT=
+         AIF   ('&EXIT' EQ 'EXIT').ERR01
+         AIF   ('&MODE' EQ 'TEST').TEST
+         AIF   ('&MODE' EQ 'PROD').PROD
+         AGO   .ERR02
+.*
+.TEST    ANOP  ,
+         USING PSA,0                       .
+         L     15,PSAAOLD                  .ASCB
+         USING ASCB,15                     .
+         ICM   15,15,ASCBTSB               .TSO user?
+         BNZ   &EXIT                       .yes, never trap
+         L     15,PSAAOLD                  .ASCB
+         L     15,ASCBASXB                 .ASXB
+         USING ASXB,15                     .
+         CLC   ASXBUSR8,ZXVTUSER           .userID match?
+         BNE   &EXIT                       .no, exit
+         DROP  0,15                        .
+.*
+.PROD    ANOP  ,
+         MEXIT ,
+.*
+.**      Macro Notes
+.*
+.ERR01   MNOTE 8,'*** ZZRUN - Invalid EXIT= operand specified'
+         MEXIT ,
+.ERR02   MNOTE 8,'*** ZZRUN - Invalid MODE= operand specified'
+         MEND

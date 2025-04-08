@@ -1,0 +1,548 @@
+XPCEOM   CSECT
+*/********************************************************************/
+*/*                                                                  */
+*/* Name:        XPCEOM                                              */
+*/*                                                                  */
+*/* Function:    ZXPC Server end-of-memory listener                  */
+*/*                                                                  */
+*/* Description: Receives control from MVS MEMTERM when an           */
+*/*              address space normally or abnormally terminates.    */
+*/*                                                                  */
+*/* Input Regs:  R0  SSCT address                                    */
+*/*              R1  SSOB address                                    */
+*/*              R13 savearea address                                */
+*/*              R14 return address                                  */
+*/*              R15 entry point address                             */
+*/*                                                                  */
+*/* Regs Usage:  R6  SSEN address                                    */
+*/*              R7  SSCT address                                    */
+*/*              R8  SSOB address                                    */
+*/*              R9  ZRWA address                                    */
+*/*              R10 base address                                    */
+*/*              R11 ZXVT address                                    */
+*/*              R12 DSA  address                                    */
+*/*              R13 savearea address                                */
+*/*                                                                  */
+*/* Output Regs: R13 savearea address                                */
+*/*              R14 return address                                  */
+*/*                                                                  */
+*/* Attributes:  TCB-mode                                            */
+*/*              Primary mode                                        */
+*/*              Key 0                                               */
+*/*              Supervisor state                                    */
+*/*              Page-fixed                                          */
+*/*              Write-protected                                     */
+*/*              Dynamic-LPA resident                                */
+*/*                                                                  */
+*/* Copyright:   Ben Marino. 2021 - 2022 (unpublished)               */
+*/*                                                                  */
+*/********************************************************************/
+*---------------------------CHANGE LOG--------------------------------*
+*                                                                     *
+* ID    Rel    Date       Author        Comments                      *
+*---------------------------------------------------------------------*
+* @01 | V1R1 | 12072021 | Ben Marino  | Initial version               *
+*     |      |          |             |                               *
+***********************************************************************
+*--------+---------+---------+---------+---------+---------+---------+*
+XPCEOM   AMODE 31
+XPCEOM   RMODE ANY
+         COPY  ZZGBL
+         USING XPCEOM,R15              Entry
+         STM   R14,R12,GPR@R14(R13)    save caller's regs
+         B     EOMMAIN                 branch
+         ZZMAC GEN=MID,DSECT=NO        module ID
+*
+EOMMAIN  DS    0H
+         DROP  R15
+         LR    R10,R15                 base
+         USING XPCEOM,R10              addressability
+         LR    R7,R0                   SSCT
+         USING SSCT,R7                 set addressability
+         LR    R8,R1                   SSOB
+         USING SSOB,R8                 set addressability
+         L     R6,SSOBINDV             SSEN
+         USING SSOBEXT,R6              set addressability
+         XR    R11,R11                 ZXVT not available
+*
+**       Obtain dynamic storage area
+*
+         SPKA  X'80'(0)                problem key
+         STORAGE OBTAIN,LOC=ANY,CALLRKY=YES,                           +
+               LENGTH=DSA@SIZE,SP=130,LINKAGE=SYSTEM
+         SPKA  0(0)                    supervisor key
+         LR    R12,R1
+         USING DSA,R12                 set addressability
+         LA    R3,DSA@SIZE             DSA size
+         LR    R2,R1                   copy address
+         XR    R15,R15                 zero
+         MVCL  R2,R14                  scrub DSA
+         ST    R13,GPR@BWD(,R1)        chain
+         ST    R1,GPR@FWD(,R13)         save,
+         LR    R13,R1                    areas.
+         ST    R8,DSASSOB              save SSOB address
+*
+**       Establish listener recovery
+*
+         LA    R9,DSAZRWA              ZRWA address
+         USING ZRWA,R9                 set addressability
+         MVC   ZRWAID,=CL4'ZRWA'       ID
+         MVC   ZRWALMOD,MIDNAME        listener module
+         MVC   ZRWASECT,MIDNAME        listener control section
+         L     R3,XPCRTM               recovery routine
+         BSM   R3,0                    set AMODE
+         MVC   DSAESTAE(ESTAEL),ESTAE  listform
+         ESTAE (3),                                                    +
+               PARAM=(9),              DRWA address                    +
+               TOKEN=DSATOKN,          store token here                +
+               MF=(E,DSAESTAE)
+         LTR   R15,R15                 successful?
+         BNZ   EOMEXIT                 no, exit
+         OI    DSAFLG1,DSA@STAE        recovery established
+*
+**       Activate listener recovery
+*
+         L     R11,SSCTSUSE            ZXVT
+         USING ZXVT,R11                set addressability
+         CLC   ZXVTID,=CL4'ZXVT'       valid indeed?
+         BNE   EOMEXIT                 no, exit
+         TM    ZXVTFLG1,ZXVT@ACT       server active?
+         BZ    EOMEXIT                 no, exit
+         ST    R11,ZRWAZXVT            init ZXVT address
+         MVC   ZRWASUBN,ZXVTSUBN       init ZXPC server
+         MVC   DSARSN,=AL4(RSN212)     set RSN
+         ZZRETRY EOMEXIT,RSN=DSARSN    activate recovery
+*
+**       Test execution mode
+*
+         ZZTRC EOM=A,SWKEY=NO,MID=MIDNAME,MOD=XPCEOM
+         TM    ZXVTFLG3,ZXVT@TST       MODE=TEST?
+         BZ    EOM0000                 no
+         ZZRUN MODE=TEST,EXIT=EOMEXIT  yes
+*
+**       Update listener entry count
+*
+EOM0000  DS    0H
+         L     R2,ZXVTEOMC             listeners count
+         LA    R3,1(,R2)               add one
+         CS    R2,R3,ZXVTEOMC          update count
+         BNE   EOM0000                 changed: try again
+*
+**       Call EOM event listeners
+*
+         LA    R5,EOMTABLE             listener table
+         USING EOM,R5                  set addressability
+         ZZTRC EOM=B,SWKEY=NO          trace
+*
+EOM0010  DS    0H
+         CLC   EOMEPA,EOMTEND          end of table?
+         BE    EOMEXIT                 yes, exit
+         L     R15,EOMEPA              routine EPA
+         BSM   R15,0                   set AMODE
+         BASR  R14,R15                 call routine
+         MVC   ZRWASECT,MIDNAME        ID mainline
+         MVC   DSARSN,=AL4(RSN212)     set RSN
+         ZZRETRY EOMEXIT,RSN=DSARSN    reset retry address
+         ZZTRC EOM=C,SWKEY=NO          trace
+         LA    R5,EOM@SIZE(,R5)        next EOM entry
+         B     EOM0010                 loop
+*---------------------------------------------------------------------*
+*        Exit Routine                                                 *
+*--------+---------+---------+---------+---------+---------+---------+*
+EOMEXIT  DS    0H
+         TM    DSAFLG1,DSA@STAE        recovery active?
+         BZ    EOMXIT00                no
+         ESTAE 0,TOKEN=DSATOKN         deactivate recovery
+         ZZTRC EOM=D,SWKEY=NO          trace
+*
+EOMXIT00 DS    0H
+         L     R13,GPR@BWD(,R13)       caller savearea
+         SPKA  X'80'(0)                problem key
+         STORAGE RELEASE,COND=NO,CALLRKY=YES,                          +
+               ADDR=(12),LENGTH=DSA@SIZE,SP=130,LINKAGE=SYSTEM
+         SPKA  0(0)                    supervisor key
+         ZZTRC EOM=E,SWKEY=NO          trace
+*
+EOMXIT99 DS    0H
+         LM    R14,R12,GPR@R14(R13)    restore caller's regs
+         XR    R15,R15                 RC
+         BR    R14                     return
+*---------------------------------------------------------------------*
+*        Constants                                                    *
+*--------+---------+---------+---------+---------+---------+---------+*
+         DS    0F
+XPCRTM   DC    V(XPCRTM)               XPCRTM
+ESTAE    ESTAE 0,MF=L                  listform
+ESTAEL   EQU   *-ESTAE
+*---------------------------------------------------------------------*
+*        EOM listener routine table                                   *
+*--------+---------+---------+---------+---------+---------+---------+*
+EOMTABLE DS    0F
+         ZZTAB GEN=EOM,TYPE=INITIAL
+*
+         ZZTAB GEN=EOM,                                                +
+               TYPE=ENTRY,                                             +
+               EP=DELZXRE              ZXRE disable routine
+*
+         ZZTAB GEN=EOM,                                                +
+               TYPE=ENTRY,                                             +
+               EP=ENFZXRE              ENF ZXRE disable routine
+*
+         ZZTAB GEN=EOM,TYPE=FINAL
+*
+EOM@TSZE EQU   *-EOMTABLE
+         DS    0F
+EOMTEND  DC    AL4(-1)                 end-of-table marker
+*---------------------------------------------------------------------*
+*        Literals                                                     *
+*--------+---------+---------+---------+---------+---------+---------+*
+         LTORG ,
+         DROP  ,
+*/********************************************************************/
+*/*                                                                  */
+*/* Name:        DELZXRE                                             */
+*/*                                                                  */
+*/* Function:    PERSIST=EOM ZXRE entries disable routine            */
+*/*                                                                  */
+*/* Input Regs:  R6  SSEN address                                    */
+*/*              R7  SSCT address                                    */
+*/*              R8  SSOB address                                    */
+*/*              R9  ZRWA address                                    */
+*/*              R11 ZXVT address                                    */
+*/*              R12 DSA address                                     */
+*/*              R13 Savearea address                                */
+*/*              R14 Return address                                  */
+*/*              R15 Entry address                                   */
+*/*                                                                  */
+*/* Regs Usage:  R4  ZXSA address                                    */
+*/*              R6  SSEN address                                    */
+*/*              R7  SSCT address                                    */
+*/*              R8  SSOB address                                    */
+*/*              R9  ZRWA address                                    */
+*/*              R10 base address                                    */
+*/*              R11 ZXVT address                                    */
+*/*              R12 DSA  address                                    */
+*/*              R13 savearea address                                */
+*/*                                                                  */
+*/* Output Regs: R15 Return code                                     */
+*/*              R0  Reason code                                     */
+*/*                                                                  */
+*/********************************************************************/
+*/-------+---------+---------+---------+---------+---------+---------*/
+DELZXRE  DS    0H
+         USING ZRWA,R9
+         USING ZXVT,R11
+         USING DSA,R12
+         USING SSOBEXT,R6
+         B     12(,R15)
+DELZID   DC    CL8'DELZXRE'            ID
+         STM   R14,R12,GPR@R14(R13)    save regs
+         LR    R10,R15                 base address
+         USING DELZXRE,R10             base addressability
+         LA    R1,DSASBSA              subroutine savearea
+         ST    R13,GPR@BWD(,R1)        chain,
+         ST    R1,GPR@FWD(,R13)        save,
+         LR    R13,R1                  areas.
+         MVC   ZRWASECT,DELZID         ID
+         LA    R4,DSAZXSA              ZXSA
+         USING ZXSA,R4                 set addressability
+         XC    ZXSA(XSA@SIZE),ZXSA
+         MVC   XSAID,=CL4'ZXSA'
+*
+**       Activate recovery
+*
+         MVC   DSARSN,=AL4(RSN272)     set RSN
+         ZZRETRY DELZXIT,RSN=DSARSN    set retry address
+         ZZTRC EOM=F,SWKEY=NO,MID=DELZID,MOD=XPCEOM
+*
+**       Disable SOM ZXRE queue entries
+*
+         XR    R5,R5
+         L     R3,ZXVTSOMQ             queue
+         CS    R5,R3,ZXVTSOMQ          listeners queued?
+         BZ    DELZ000                 no
+         ST    R5,XSAPARM              queue address
+         MVC   XSAASCB,SSENASCB        ASCB address
+         ZZCALL ZXSA,EP=EOMZXRE        disable PERSIST=EOM entries
+         ZZTRC EOM=G,SWKEY=NO          trace
+*
+**       Disable EOM ZXRE queue entries
+*
+DELZ000  DS    0H
+         XR    R5,R5
+         L     R3,ZXVTEOMQ             queue
+         CS    R5,R3,ZXVTEOMQ          listeners queued?
+         BZ    DELZ010                 no
+         ST    R5,XSAPARM              queue address
+         MVC   XSAASCB,SSENASCB        ASCB address
+         ZZCALL ZXSA,EP=EOMZXRE        disable PERSIST=EOM entries
+         ZZTRC EOM=H,SWKEY=NO          trace
+*
+**       Disable CMD ZXRE queue entries
+*
+DELZ010  DS    0H
+         XR    R5,R5
+         L     R3,ZXVTCMDQ             queue
+         CS    R5,R3,ZXVTCMDQ          listeners queued?
+         BZ    DELZ020                 no
+         ST    R5,XSAPARM              queue address
+         MVC   XSAASCB,SSENASCB        ASCB address
+         ZZCALL ZXSA,EP=EOMZXRE        disable PERSIST=EOM entries
+         ZZTRC EOM=I,SWKEY=NO          trace
+*
+**       Disable WTO ZXRE queue entries
+*
+DELZ020  DS    0H
+         XR    R5,R5
+         L     R3,ZXVTWTOQ             queue
+         CS    R5,R3,ZXVTWTOQ          listeners queued?
+         BZ    DELZ030                 no
+         ST    R5,XSAPARM              queue address
+         MVC   XSAASCB,SSENASCB        ASCB address
+         ZZCALL ZXSA,EP=EOMZXRE        disable PERSIST=EOM entries
+         ZZTRC EOM=J,SWKEY=NO          trace
+*
+**       Disable Db2 ZXRE queue entries
+*
+DELZ030  DS    0H
+         XR    R5,R5
+         L     R3,ZXVTDB2Q             queue
+         CS    R5,R3,ZXVTDB2Q          listeners queued?
+         BZ    DELZ040                 no
+         ST    R5,XSAPARM              queue address
+         MVC   XSAASCB,SSENASCB        ASCB address
+         ZZCALL ZXSA,EP=EOMZXRE        disable PERSIST=EOM entries
+         ZZTRC EOM=K,SWKEY=NO          trace
+*
+**       Disable XCF ZXRE queue entries
+*
+DELZ040  DS    0H
+         XR    R5,R5
+         L     R3,ZXVTXCFQ             queue
+         CS    R5,R3,ZXVTXCFQ          listeners queued?
+         BZ    DELZXIT                 no
+         ST    R5,XSAPARM              queue address
+         MVC   XSAASCB,SSENASCB        ASCB address
+         ZZCALL ZXSA,EP=EOMZXRE        disable PERSIST=EOM entries
+         ZZTRC EOM=L,SWKEY=NO          trace
+*
+DELZXIT  DS    0H
+         L     R13,GPR@BWD(,R13)       mainline savearea
+         LM    R15,R1,DSAOPAR          output regs
+         LM    R2,R12,GPR@R2(R13)      restore regs
+         L     R14,GPR@R14(,R13)       return address
+         BR    R14                     return
+*---------------------------------------------------------------------*
+*        Constants/Literals                                           *
+*--------+---------+---------+---------+---------+---------+---------+*
+         LTORG ,
+         DROP  ,
+*/********************************************************************/
+*/*                                                                  */
+*/* Name:        ENFZXRE                                             */
+*/*                                                                  */
+*/* Function:    PERSIST=EOM ZXRE disable routine                    */
+*/*                                                                  */
+*/* Input Regs:  R6  SSEN address                                    */
+*/*              R7  SSCT address                                    */
+*/*              R8  SSOB address                                    */
+*/*              R9  ZRWA address                                    */
+*/*              R11 ZXVT address                                    */
+*/*              R12 DSA address                                     */
+*/*              R13 Savearea address                                */
+*/*              R14 Return address                                  */
+*/*              R15 Entry address                                   */
+*/*                                                                  */
+*/* Regs Usage:  R4  ZXSA address                                    */
+*/*              R5  ZXRE address                                    */
+*/*              R6  SSEN address                                    */
+*/*              R7  SSCT address                                    */
+*/*              R8  SSOB address                                    */
+*/*              R9  ZRWA address                                    */
+*/*              R10 base address                                    */
+*/*              R11 ZXVT address                                    */
+*/*              R12 DSA  address                                    */
+*/*              R13 savearea address                                */
+*/*                                                                  */
+*/* Output Regs: R15 Return code                                     */
+*/*              R0  Reason code                                     */
+*/*                                                                  */
+*/********************************************************************/
+*/-------+---------+---------+---------+---------+---------+---------*/
+ENFZXRE  DS    0H
+         USING ZRWA,R9
+         USING ZXVT,R11
+         USING DSA,R12
+         USING SSOBEXT,R6
+         B     12(,R15)
+ENFZID   DC    CL8'ENFZXRE'            ID
+         STM   R14,R12,GPR@R14(R13)    save regs
+         LR    R10,R15                 base address
+         USING ENFZXRE,R10             base addressability
+         LA    R1,DSASBSA              subroutine savearea
+         ST    R13,GPR@BWD(,R1)        chain,
+         ST    R1,GPR@FWD(,R13)        save,
+         LR    R13,R1                  areas.
+         MVC   ZRWASECT,ENFZID         ID
+         LA    R4,DSAZXSA              ZXSA
+         USING ZXSA,R4
+*
+**       Activate recovery
+*
+         MVC   DSARSN,=AL4(RSN268)     set RSN
+         ZZRETRY ENFZXIT,RSN=DSARSN    set retry address
+         ZZTRC EOM=M,SWKEY=NO,MID=ENFZID,MOD=XPCEOM
+*
+**       Locate listener ZXRE entry
+*
+         XR    R5,R5
+         L     R3,ZXVTENFQ             queue
+         CS    R5,R3,ZXVTENFQ          listeners queued?
+         BZ    ENFZXIT                 no, exit
+         USING ZXRE,R5                 set addressability
+         ZZTRC EOM=N,SWKEY=NO          trace
+         B     ENFZ010                 scan queue
+*
+ENFZ000  DS    0H
+         ICM   R5,15,XRECHPTR          last entry?
+         BZ    ENFZXIT                 yes, exit
+         ZZTRC EOM=O,SWKEY=NO          trace
+*
+ENFZ010  DS    0H
+         CLC   XREID,=CL4'ZXRE'        valid entry?
+         BE    ENFZ020                 yes
+         ZZTRC EOM=P,SWKEY=NO          trace
+         B     ENFZXIT                 exit
+*
+ENFZ020  DS    0H
+         TM    XREOPTS1,XRE@ZPM        PERSIST=EOM?
+         BZ    ENFZ000                 no, next entry
+         L     R3,SSENASCB             ASCB
+         USING ASCB,R3                 set addressability
+         L     R3,ASCBASSB             ASSB
+         USING ASSB,R3                 set addressability
+         CLC   XRESTOKN,ASSBSTKN       same instance?
+         BNE   ENFZ000                 no, next entry
+         ZZTRC EOM=Q,SWKEY=NO          trace
+*
+**       Issue ENFREQ ACTION=DELETE call
+*
+         TM    XREFLAG1,XRE@OWNR       ENF signal owner?
+         BZ    ENFZ030                 no, skip ENF delete
+         TM    XREFLAG1,XRE@ENFD       ENF delete requird?
+         BZ    ENFZ030                 no, skip ENF delete
+         XC    ZXSA(XSA@SIZE),ZXSA
+         MVC   XSAID,=CL4'ZXSA'
+         ST    R5,XSAZXRE              ENF signal owner
+         MVC   XSAPARM,XRESIGNL        set signal code
+         ZZCALL ZXSA,EP=ENFCHLD        locate child ZXRE
+         ST    R15,DSARC               save RC
+         LTR   R15,R15                 any children?
+         BNZ   ENFZ030                 yes, skip ENF delete
+         L     R2,XRESIGNL             signal code
+         L     R3,XRETKENF             delete token
+         MVC   DSAPLST(ZENFREQL),ZENFREQ
+         ENFREQ ACTION=DELETE,CODE=(2),DTOKEN=(3),                     +
+               MF=(E,DSAPLST)
+         NIL   XREFLAG1,XFF-XRE@ENFD,REF=XREFLAGS
+         ZZTRC EOM=R,SWKEY=NO          trace
+*
+**       Disable listener ZXRE entry
+*
+ENFZ030  DS    0H
+         OIL   XREFLAG1,XRE@OFFQ,REF=XREFLAGS
+         OIL   XREFLAG2,XRE@DELM,REF=XREFLAGS
+         STCK  XREESTCK                store clock value
+         XC    DSARC,DSARC             set RC
+         ZZTRC EOM=S,SWKEY=NO          trace
+         B     ENFZ000                 next entry
+*
+ENFZXIT  DS    0H
+         L     R13,GPR@BWD(,R13)       mainline savearea
+         LM    R15,R1,DSAOPAR          output regs
+         LM    R2,R12,GPR@R2(R13)      restore regs
+         L     R14,GPR@R14(,R13)       return address
+         BR    R14                     return
+*---------------------------------------------------------------------*
+*        Constants/Literals                                           *
+*--------+---------+---------+---------+---------+---------+---------+*
+         DS    0F
+ZENFREQ  ENFREQ ACTION=DELETE,CODE=*-*,MF=L
+ZENFREQL EQU   *-ZENFREQ
+         LTORG ,
+         DROP  ,
+*---------------------------------------------------------------------*
+*        Dynamic Storage Area                                         *
+*--------+---------+---------+---------+---------+---------+---------+*
+DSA      DSECT ,
+DSASAVE  DS    18F                     savearea
+DSASBSA  DS    18F                     subroutine savearea
+DSAENFS  DS    18F                     ENF subroutine savearea
+         DS    0X
+DSAFLG1  DS    XL1                     flags
+DSA@STAE EQU   X'80'                   recovery indicator
+DSA@RV1  EQU   X'40'                   -available
+DSA@RV2  EQU   X'20'                   -available
+DSA@RV3  EQU   X'10'                   -available
+DSA@RV4  EQU   X'08'                   -available
+DSA@RV5  EQU   X'04'                   -available
+DSA@RV6  EQU   X'02'                   -available
+DSA@RV7  EQU   X'01'                   -available
+         DS    0X
+DSAFLGX  DS    XL1                     -available
+DSAXASID DS    XL2                     XASID
+         DS    0F
+DSAOPAR  DS    0F                      output parms
+DSARC    DS    F                       -1. R15
+DSARSN   DS    F                       -2. R0
+DSAGR1   DS    F                       -3. R1
+DSA@OPAL EQU   *-DSAOPAR               keep it together
+         DS    0F
+DSACKEY  DS    F                       caller key
+DSATOKN  DS    F                       ESTAE token
+DSASSOB  DS    A                       SSOB address
+DSAXASCB DS    A                       XASCB
+ENFPTR   DS    F                       needed by ENFREQ macro
+DSASTOKN DS    XL8                     STOKEN
+DSAXSTKN DS    XL8                     XSTOKEN
+DSATTOKN DS    XL16                    TTOKEN
+DSAJOBNM DS    CL8                     jobname
+         DS    0F
+DSAESTAE DS    CL(ESTAEL)              ESTAE listform
+         DS    0F
+DSAZRWA  DS    CL(ZRWA@SZE)            ZRWA recovery workarea
+         DS    0F
+DSAZXSA  DS    CL(XSA@SIZE)            ZXSA listform
+         DS    0F
+DSAPLST  DS    XL256                   parmlist
+         DS    0D
+DSA@SIZE EQU   *-DSA                   size of DSA
+*---------------------------------------------------------------------*
+*        Server Data Areas                                            *
+*--------+---------+---------+---------+---------+---------+---------+*
+         PRINT NOGEN
+         ZZXVT ,
+         ZZXRE ,
+         ZZXSA ,
+         ZZRWA ,
+         ZZEQU ,
+         ZZTAB GEN=EOM,DSECT=YES
+         ZZMAC GEN=MID,ID=XID,DSECT=YES
+*---------------------------------------------------------------------*
+*        System data areas                                            *
+*--------+---------+---------+---------+---------+---------+---------+*
+         PRINT NOGEN
+         IHAPSA ,
+         IHAASCB ,
+         IHAASXB ,
+         IHAASSB ,
+         IEFENFCT ,
+         IEFENFPM ,
+         CVT   DSECT=YES
+         IEFJESCT ,
+         IEFJSCVT ,
+         IEFJSSIB ,
+         IEFJSSOB (EN),CONTIG=NO
+         IEFENFSG ,      ENF signal data map
+ENSG@SZE EQU *-ENSG
+         END

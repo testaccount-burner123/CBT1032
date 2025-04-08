@@ -1,0 +1,243 @@
+.*/*******************************************************************/
+.*/*                                                                 */
+.*/* NAME:                                                           */
+.*/*  ZFREMEM                                                        */
+.*/*                                                                 */
+.*/* FUNCTION:                                                       */
+.*/*  Release storage outside the primary address space.             */
+.*/*                                                                 */
+.*/* DESCRIPTION:                                                    */
+.*/*  Add the address space represented by the target STOKEN to      */
+.*/*  the DU-AL as a public entry and release private storage in     */
+.*/*  the target address space.                                      */
+.*/*                                                                 */
+.*/* ENVIRONMENT:                                                    */
+.*/*  TCB or SRB mode.                                               */
+.*/*  Enabled for I/O and External interrupts.                       */
+.*/*  The caller must ot be locked.                                  */
+.*/*                                                                 */
+.*/* SECURITY:                                                       */
+.*/*  When SAF=NOCALL is specified, security checks are bypassed.    */
+.*/*  When SAF=XPCCLASS is specified, the caller must have READ      */
+.*/*  authority to profile ZXPC.API.AUTH in resource class XPCCLASS. */
+.*/*                                                                 */
+.*/* ADDR=                                                           */
+.*/*  A required parameter. Specifies the storage address to be      */
+.*/*  released. To code, specify the RS-type, or address in register */
+.*/*  (2)-(12).                                                      */
+.*/*                                                                 */
+.*/* PARAMETERS:                                                     */
+.*/* SP=                                                             */
+.*/*  An optional parameter. Specifies the private area subpool      */
+.*/*  number of the storage. If you specify a register, the subpool  */
+.*/*  number must be in bits 24-31 of the register, with bits 0-23   */
+.*/*  set to zero. If you omit this parameter the default is subpool */
+.*/*  zero.                                                          */
+.*/*                                                                 */
+.*/* LENGTH=                                                         */
+.*/*  A required parameter. Specifies the length of the storage      */
+.*/*  to be released. To code, specify the RS-type, or address in    */
+.*/*  register (2)-(12).                                             */
+.*/*                                                                 */
+.*/* JOB=                                                            */
+.*/* STC=                                                            */
+.*/* TSU=                                                            */
+.*/* STOKEN=                                                         */
+.*/*  A required parameter. Specifies the address of the 8-byte      */
+.*/*  STOKEN or the address of the 8-byte JOB, STC or TSU jobname    */
+.*/*  where the storage to be released resides. To code, specify     */
+.*/*  the RS-type address, or address in register (2)-(12).          */
+.*/*                                                                 */
+.*/* R15 - RETURN CODES:                                             */
+.*/*  00 - Request completed successfully                            */
+.*/*  08 - Request terminated abnormally                             */
+.*/*                                                                 */
+.*/* R0  - REASON CODES:                                             */
+.*/*  00000000 - Successful completion                               */
+.*/*  00000004 - Invalid STOKEN supplied                             */
+.*/*  00000008 - ALESERV ADD failed                                  */
+.*/*  00000012 - STORAGE release with ALET failed                    */
+.*/*  00000016 - Invalid STOKEN specified or JOB,STC,TSU not found.  */
+.*/*  00000020 - ALESERV DELETE failed                               */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* EXAMPLE 1:                                                      */
+.*/*                                                                 */
+.*/*  Release storage pointed to by register 2, in subpool specified */
+.*/*  by register 3, for the length specified by register 4, in the  */
+.*/*  address space specified by the 8-byte STOKEN pointed to by     */
+.*/*  register 5.                                                    */
+.*/*                                                                 */
+.*/*   ZFREMEM ADDR=(2),SP=(3),LENGTH=(4),STOKEN=(5)                 */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* EXAMPLE 2:                                                      */
+.*/*                                                                 */
+.*/*  Release storage pointed to by register 2, in default subpool   */
+.*/*  0, for the length specified by register 3, in started task     */
+.*/*  address space specified by the 8-character started task name   */
+.*/*  pointed to by register 4.                                      */
+.*/*                                                                 */
+.*/*   ZFREMEM ADDR=(2),LENGTH=(3),JOB=(4)                           */
+.*/*                                                                 */
+.*/* --------------------------------------------------------------- */
+.*/*                                                                 */
+.*/* © Copyright Ben Marino. 2021 - 2022 (unpublished)               */
+.*/*                                                                 */
+.*/*******************************************************************/
+.*---------------------------CHANGE LOG-------------------------------*
+.*                                                                    *
+.* ID    Rel    Date       Author        Comments                     *
+.*--------------------------------------------------------------------*
+.* @01 | V1R1 | 12072021 | Ben Marino  | Initial version              *
+.*     |      |          |             |                              *
+.**********************************************************************
+.*-------+---------+---------+---------+---------+---------+---------+*
+         MACRO
+&ZID     ZFREMEM &SP=,                 .subpool                        +
+               &ADDR=,                 .address                        +
+               &LENGTH=,               .length                         +
+               &STOKEN=,               .space token                    +
+               &JOB=,                  .JOBname                        +
+               &STC=,                  .STCname                        +
+               &TSU=                   .TSUname
+.*
+         COPY  ZZGBL
+.*
+.**      SP= parameter
+.*
+         AIF   ('&SP' NE '').FREE00
+         LAE   0,0                     .SP=0 default
+         AGO   .FREE06
+.*
+.FREE00  ANOP  ,
+         AIF   ('&SP'(1,1) EQ '(').FREE05
+         AIF   (T'&SP NE 'N').FREE02
+         LAE   0,&SP                   .subpool
+         AGO   .FREE06
+.*
+.FREE02  ANOP  ,
+         L     0,&SP                   .subpool
+         AGO   .FREE06
+.*
+.FREE05  ANOP  ,
+         LR    0,&SP                   .subpool
+.*
+.**      ADDR= parameter
+.*
+.FREE06  ANOP  ,
+         AIF   ('&ADDR' EQ '').ERR00
+         AIF   ('&ADDR'(1,1) EQ '(').FREE07
+         L     15,&ADDR                .storage address
+         SAR   0,15                    .copy R15 to AR0
+         AGO   .FREE10
+.*
+.FREE07  ANOP  ,
+         SAR   0,&ADDR                 .load address in AR0
+.*
+.**      LENGTH= parameter
+.*
+.FREE10  ANOP  ,
+         AIF   ('&LENGTH' EQ '').ERR01
+         AIF   ('&LENGTH'(1,1) EQ '(').FREE20
+         AIF   (T'&LENGTH NE 'N').FREE15
+         L     1,=AL4(&LENGTH)         .length
+         AGO   .FREE25
+.*
+.FREE15  ANOP  ,
+         L     1,&LENGTH               .length
+         AGO   .FREE25
+.*
+.FREE20  ANOP  ,
+         LR    1,&LENGTH               .length
+.*
+.**      STOKEN parameter
+.*
+.FREE25  ANOP  ,
+         AIF   ('&STOKEN' EQ '').FREE35
+         AIF   ('&JOB' NE '').ERR03
+         AIF   ('&STC' NE '').ERR04
+         AIF   ('&TSU' NE '').ERR05
+         AIF   ('&STOKEN'(1,1) EQ '(').FREE30
+         LAE   15,&STOKEN              .STOKEN address
+         SAR   1,15                    .copy R1 to AR1
+         LAM   15,15,=AL4(&TOKID)      .STOKEN supplied
+         AGO   .FREE99
+.*
+.FREE30  ANOP  ,
+         SAR   1,&STOKEN               .STOKEN address in AR1
+         LAM   15,15,=AL4(&TOKID)      .STOKEN supplied
+         AGO   .FREE99
+.*
+.**      {JOB|STC|TSU} parameter
+.*
+.FREE35  ANOP  ,
+         AIF   ('&STOKEN' NE '').ERR03
+         AIF   ('&JOB' EQ '').FREE45
+         AIF   ('&STC' NE '').ERR06
+         AIF   ('&TSU' NE '').ERR06
+         AIF   ('&JOB'(1,1) EQ '(').FREE40
+         LAE   15,&JOB                 .JOBname address
+         SAR   1,15                    .copy R1 to AR1
+         LAM   15,15,=AL4(&JOBID)      .JOBname supplied
+         AGO   .FREE99
+.*
+.FREE40  ANOP  ,
+         SAR   1,&JOB                  .JOBname address in AR1
+         LAM   15,15,=AL4(&JOBID)      .JOBname supplied
+         AGO   .FREE99
+.*
+.FREE45  ANOP  ,
+         AIF   ('&STOKEN' NE '').ERR04
+         AIF   ('&STC' EQ '').FREE55
+         AIF   ('&JOB' NE '').ERR06
+         AIF   ('&TSU' NE '').ERR06
+         AIF   ('&STC'(1,1) EQ '(').FREE50
+         LAE   15,&STC                 .STCname address
+         SAR   1,15                    .copy R1 to AR1
+         LAM   15,15,=AL4(&STCID)      .STCname supplied
+         AGO   .FREE99
+.*
+.FREE50  ANOP  ,
+         SAR   1,&STC                  .STCname address in AR1
+         LAM   15,15,=AL4(&STCID)      .STCname supplied
+         AGO   .FREE99
+.*
+.FREE55  ANOP  ,
+         AIF   ('&STOKEN' NE '').ERR05
+         AIF   ('&TSU' EQ '').ERR02
+         AIF   ('&JOB' NE '').ERR06
+         AIF   ('&STC' NE '').ERR06
+         AIF   ('&TSU'(1,1) EQ '(').FREE60
+         LAE   15,&TSU                 .TSUname address
+         SAR   1,15                    .copy R1 to AR1
+         LAM   15,15,=AL4(&TSUID)      .TSUname supplied
+         AGO   .FREE99
+.*
+.FREE60  ANOP  ,
+         SAR   1,&TSU                  .TSUname address in AR1
+         LAM   15,15,=AL4(&TSUID)      .TSUname supplied
+.*
+.FREE99  ANOP  ,
+         LAE   15,&FREMEM              .PCID
+         ZZMAC GEN=XPC                 .XPCSRV PC router
+         MEXIT ,
+.*
+.**      Macro Notes
+.*
+.ERR00   MNOTE 8,'*** ZFREMEM - Invalid ADDR parameter specified'
+         MEXIT ,
+.ERR01   MNOTE 8,'*** ZFREMEM - Invalid LENGTH parameter specified'
+         MEXIT ,
+.ERR02   MNOTE 8,'*** ZFREMEM - JOB, STC, TSU parameter not specified'
+         MEXIT ,
+.ERR03   MNOTE 8,'*** ZFREMEM - JOB and STOKEN are mutually exclusive'
+         MEXIT ,
+.ERR04   MNOTE 8,'*** ZFREMEM - STC and STOKEN are mutually exclusive'
+         MEXIT ,
+.ERR05   MNOTE 8,'*** ZFREMEM - TSU and STOKEN are mutually exclusive'
+         MEXIT ,
+.ERR06   MNOTE 8,'*** ZFREMEM - JOB, STC, TSU are mutually exclusive'
+         MEND

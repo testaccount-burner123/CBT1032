@@ -1,0 +1,52 @@
+************************************************************************
+*                                                                      *
+*                       ZXPC INSTALLATION                              *
+*                                                                      *
+*                                                                      *
+*   To install the ZXPC server, follow these installation steps:       *
+*                                                                      *
+*   1. Modify and submit job ZXPCLINK.                                 *
+*      ZXPCLINK assembles and links into SYS1.LINKLIB modules,         *
+*      ZXPCINI, ZXPCSRV and ZXPCTST.                                   *
+*                                                                      *
+*   2. Modify and submit job ZXPCRACF.                                 *
+*      ZXPCRACF defines the XPCCLASS and resource profiles to your     *
+*      security server.                                                *
+*                                                                      *
+*   3. Define ZXPC to PARMLIB member IEFSSNxx.                         *
+*                                                                      *
+*      SUBSYS SUBNAME(ZXPC)                                            *
+*             INITRTN(ZXPCINI)                                         *
+*             INITPARM('SRV=ZXPCSRV')                                  *
+*                                                                      *
+*   4. Issue the following command to refresh the LLA:                 *
+*                                                                      *
+*      MODIFY LLA,REFRESH                                              *
+*                                                                      *
+*   5. Issue the SETSSI ADD command to dynamically define the ZXPC     *
+*      server subsystem.                                               *
+*                                                                      *
+*      SETSSI ADD,SUB=ZXPC,I=ZXPCINI,P='SRV=ZXPCSRV'                   *
+*                                                                      *
+*   6. Successful ZXPC server initialization issues the following      *
+*      WTO messages:                                                   *
+*                                                                      *
+*      ZXPC000I ZXPC Server initialization in progress                 *
+*      ZXPC002I ZXPC Server module ZXPCSRV added to dynamic LPA        *
+*      ZXPC001I ZXPC Server initialization complete                    *
+*                                                                      *
+*                                                                      *
+*   CONTACT ME:                                                        *
+*                                                                      *
+*   Feel free to contact me if you have questions.                     *
+*                                                                      *
+*   Ben Marino                                                         *
+*   Retired Senior Software Engineer                                   *
+*   IT Architect                                                       *
+*                                                                      *
+*   719.271.1344                                                       *
+*   b2marino@outlook.com                                               *
+*   linkedin.com/in/ben-marino-40887915                                *
+*   https://allthingszos4.webnode.page                                 *
+*                                                                      *
+************************************************************************

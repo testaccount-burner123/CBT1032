@@ -1,0 +1,146 @@
+         MACRO
+*/*******************************************************************/
+*/*                                                                 */
+*/* Name: ZZXRE                                                     */
+*/*                                                                 */
+*/* Description: Listener routine work element                      */
+*/*                                                                 */
+*/* Residency:   CSA subpool 241                                    */
+*/*                                                                 */
+*/* Notes: None                                                     */
+*/*                                                                 */
+*/*******************************************************************/
+*---------------------------CHANGE LOG-------------------------------*
+*                                                                    *
+* ID    Rel    Date       Author        Comments                     *
+*--------------------------------------------------------------------*
+* @01 | V1R1 | 12072021 | Ben Marino  | Initial version              *
+*     |      |          |             |                              *
+**********************************************************************
+*-------+---------+---------+---------+---------+---------+---------+*
+&ZXRE    ZZXRE ,
+         COPY  ZZGBL
+ZXRE     DSECT ,
+XRE      DS    0F
+XREID    DS    CL4'ZXRE'    ID
+XRECHPTR DS    A            chain pointer
+XREOPTS  DS    0XL4         options
+XREOPTS1 DS    XL1          OPT1
+XRE@ZEP  EQU   X'80' 1      1-EP=entry      0=LMOD=name
+XRE@ZKY  EQU   X'40' 2      1-KEY=0         0=KEY=8
+XRE@ZMD  EQU   X'20' 3      1-MODE=SUP      0-MODE=PROB
+XRE@ZPM  EQU   X'10' 4      1-PERSIST=EOM
+XRE@ZPL  EQU   X'08' 5      1-PERSIST=IPL
+XRE@DBA  EQU   X'04' 6      1-DB2=*
+XRE@DBX  EQU   X'02' 7      1-DB2=message
+XRE@ZPN  EQU   X'01' 8      1-PERSIST=NO
+*
+XREOPTS2 DS    XL1          OPT2
+XRE@SAA  EQU   X'80' 9      1-SOM=*
+XRE@MAA  EQU   X'40' 10     1-EOM=*
+XRE@XXA  EQU   X'20' 11     1-XCF=*
+XRE@CAA  EQU   X'10' 12     1-CMD=*
+XRE@CAC  EQU   X'08' 13     1-CMD=command
+XRE@CAL  EQU   X'04' 14     1-ALIAS=*|ALIAS=command-alias
+XRE@ZPT  EQU   X'02' 15     1-PERSIST=EOT
+XRE@WAM  EQU   X'01' 16     1-WTO=message
+*
+XREOPTS3 DS    XL1          OPT3
+XRE@AAS  EQU   X'80' 17     1-ASCB=
+XRE@ATK  EQU   X'40' 18     1-STOKEN=
+XRE@XTK  EQU   X'20' 19     1-XSTOKEN=
+XRE@XTT  EQU   X'10' 20     1-XTTOKEN=
+XRE@XAS  EQU   X'08' 21     1-XASCB=
+XRE@XTC  EQU   X'04' 22     1-XTCB=
+XRE@XRM  EQU   X'02' 23     1-EXEC=TCB  0=EXEC=SRB
+XRE@ZAB  EQU   X'01' 24     1-ABTERM=YES 0=ABTERM=NO
+*
+XREOPTS4 DS    XL1          OPT4
+XRE@ZNF  EQU   X'80' 25     1-ENF=code
+XRE@XXF  EQU   X'40' 26     1-XCF=message
+XRE@OP42 EQU   X'20' 27     -reserved
+XRE@O4P3 EQU   X'10' 28     -reserved
+XRE@O4P4 EQU   X'08' 29     -reserved
+XRE@O4P5 EQU   X'04' 30     -reserved
+XRE@O4P6 EQU   X'02' 31     -reserved
+XRE@O4P7 EQU   X'01' 32     -reserved
+*
+XRETYPE  DS    XL1          system event type
+XRE@ZEOM EQU   X'&TEOM'     EOM event
+XRE@ZCMD EQU   X'&TCMD'     CMD event
+XRE@ZWTO EQU   X'&TWTO'     WTO event
+XRE@ZENF EQU   X'&TENF'     ENF event
+XRE@ZSOM EQU   X'&TSOM'     SOM event
+XRE@ZDB2 EQU   X'&TDB2'     DB2 event
+XRE@ZXCF EQU   X'&TXCF'     XCF event
+XRE@ZSVC EQU   X'&TSVC'     SVC event
+*
+XRETYPE2 DS    XL1          -reserved
+XREEJOB  DS    XL1          JOB(2); STC(3); TSU(4)
+XREXJOB  DS    XL1          XJOB(2); XSTC(3); XTSU(4)
+*
+XREFLAGS DS    0F
+XREFLAG1 DS    XL1          flags
+XRE@OFFQ EQU   X'80'        disabled indicator
+XRE@ABND EQU   X'40'        ABEND indicator
+XRE@OWNR EQU   X'20'        ENFREQ event request owner
+XRE@CHLD EQU   X'10'        ENFREQ event request child
+XRE@ENFD EQU   X'08'        ENFREQ delete call required
+XRE@F1V5 EQU   X'04'        -available
+XRE@F1V6 EQU   X'02'        -available
+XRE@F1V7 EQU   X'01'        -available
+*
+XREFLAG2 DS    XL1          flags
+XRE@DELM EQU   X'80'        disabled by XPCEOM
+XRE@DELT EQU   X'40'        disabled by XPCEOT
+XRE@DELS EQU   X'20'        disabled by XPCSRV
+XRE@DELL EQU   X'10'        disabled by XPCSRV
+XRE@DELN EQU   X'08'        disabled by XPCNUC
+XRE@F2V5 EQU   X'04'        -available
+XRE@F2V6 EQU   X'02'        -available
+XRE@F2V7 EQU   X'01'        -available
+XREFLG34 DS    XL2          -available
+XRE@FLGS EQU   *-XREFLAGS
+         DS    0F
+XREZXVT  DS    A            ZXVT address
+XREOWNER DS    A            ENF owner ZXRE
+XRETOKEN DS    F            ZLISTEN token
+XRETKENF DS    F            ENFREQ ACTION=LISTEN token
+XRESIGNL DS    F            ENF signal code
+XRESCHED DS    F            SRB schedule count
+XRERSVZ  DS    AL2          -reserved
+XREASID  DS    AL2          ZLISTEN - requestor ASID
+XRETCB   DS    A            ZLISTEN - requestor TCB
+XREASCB  DS    A            ZLISTEN - requestor ASCB
+XRESTOKN DS    XL8          ZLISTEN - requestor STOKEN
+XRETTOKN DS    XL16         ZLISTEN - requestor TTOKEN
+         DS    0F
+XREEP    DS    A            EP      - listener routine EPA
+XREPARM  DS    A            PARM    - listener routine parm
+XREMODNM DS    CL8          LMOD    - listener routine LMOD
+         DS    0F
+XREETCB  DS    A            TCB     - where event triggered
+XREEASCB DS    A            ASCB    - where event triggered
+XREEJOBN DS    CL8          JOB     - where event triggered
+XREESTEP DS    CL8          JOBSTEP - where event triggered
+XREESTKN DS    XL8          STOKEN  - where event triggered
+XREESTCK DS    XL8          STCK    - where event triggered
+         DS    0F
+XREXRSV2 DS    AL2          .....   - reserved
+XREXASID DS    AL2          XASID   - where listener executes
+XREXASCB DS    A            XASCB   - where listener executes
+XREXTCB  DS    A            XTCB    - where listener executes
+XREXSTKN DS    XL8          XSTOKEN - where listener executes
+XREXTTKN DS    XL16         XTTOKEN - where listener executes
+XREXJOBN DS    CL8          XJOB    - where listener executes
+XRE@CLR  EQU   *-ZXRE       scrub size
+         DS    0C
+XREEVENT DS    CL72         listener trigger data
+XRE@DATA EQU   *-XREEVENT
+         DS    0C
+XREALIAS DS    CL72         listener trigger data
+XRE@ADTA EQU   *-XREALIAS
+         DS    0D
+XRE@SIZE EQU   *-XRE        XRE size
+XRE@MAX  DS    0XL(512-XRE@SIZE+1)
+         MEND

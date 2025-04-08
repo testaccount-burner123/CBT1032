@@ -1,0 +1,286 @@
+         MACRO
+.*/*******************************************************************/
+.*/*                                                                 */
+.*/* Nane: ZZTRC                                                     */
+.*/*                                                                 */
+.*/* Function:    ZXPC server code-path trace macro                  */
+.*/*                                                                 */
+.*/* Description: Used by TCB-mode and SRB-mode serve routines       */
+.*/*              to capture code-path trace data crumbs.            */
+.*/*                                                                 */
+.*/* Notes: None                                                     */
+.*/*                                                                 */
+.*/*******************************************************************/
+.*---------------------------CHANGE LOG-------------------------------*
+.*                                                                    *
+.* ID    Rel    Date       Author        Comments                     *
+.*--------------------------------------------------------------------*
+.* @01 | V1R1 | 12072021 | Ben Marino  | Initial version              *
+.*     |      |          |             |                              *
+.**********************************************************************
+.*-------+---------+---------+---------+---------+---------+---------+*
+         ZZTRC &SRV=,&CMD=,&WTO=,&EOM=,&EOT=,&ENF=,&NUC=,&IRB=,&SRB=,  +
+               &INI=,&TRG=,&RUN=,&LOC=,&PAR=,&LSN=,&SCH=,&DB2=,&SVC=,  +
+               &XCF=,&MID=,&MOD=,&SOM=,&SWKEY=YES,&WREG=15,&CLEAR=NO
+.*
+         LCLC  &TID
+         LCLC  &TIN
+         LCLC  &TMD
+         LCLC  &TIV
+         LCLC  &TRC
+         LCLC  &TRZ
+.*
+&TID     SETC  ' '
+&TIN     SETC  ' '
+&TMD     SETC  ' '
+&TIV     SETC  ' '
+&TRC     SETC  ' '
+&TRZ     SETC  'TRZ'.'&SYSNDX'
+.*
+         LTR   R11,R11                 .ZXVT available?
+         BZ    &TRZ                    .no
+         CLC   ZXVTID,=CL4'ZXVT'       .ZXVT?
+         BNE   &TRZ                    .no
+         TM    ZXVTFLG2,ZXVT@TRC       .TRC=ON set?
+         BZ    &TRZ                    .no
+.*
+         AIF   ('&SWKEY' EQ 'NO').TRC000
+         LR    &WREG,2                 .protect register 2
+         IPK   ,                       .caller key
+         SPKA  0(0)                    .ZXVT key
+.*
+.**      INI= expansion
+.*
+.TRC000  ANOP  ,
+         AIF   ('&INI' EQ '').TRC010
+&TIV     SETC  '&INI'
+&TID     SETC  'ZTRCINI'
+&TMD     SETC  'ZTRCIVLX'
+&TIN     SETC  'ZTRCIVIX'
+&TRC     SETC  'ZTRCINTR'
+         AGO   .TRC900
+.*
+.**      SRV= expansion
+.*
+.TRC010  ANOP  ,
+         AIF   ('&SRV' EQ '').TRC100
+&TIV     SETC  '&SRV'
+&TID     SETC  'ZTRCSRV'
+&TMD     SETC  'ZTRCSVLX'
+&TIN     SETC  'ZTRCSVIX'
+&TRC     SETC  'ZTRCSVTR'
+         AGO   .TRC900
+.*
+.**      CMD= expansion
+.*
+.TRC100  ANOP  ,
+         AIF   ('&CMD' EQ '').TRC200
+&TIV     SETC  '&CMD'
+&TID     SETC  'ZTRCCMD'   '
+&TMD     SETC  'ZTRCCMLX'
+&TIN     SETC  'ZTRCCMIX'
+&TRC     SETC  'ZTRCCMTR'
+         AGO   .TRC900
+.*
+.**      WTO= expansion
+.*
+.TRC200  ANOP  ,
+         AIF   ('&WTO' EQ '').TRC300
+&TIV     SETC  '&WTO'
+&TID     SETC  'ZTRCWTO'
+&TMD     SETC  'ZTRCWTLX'
+&TIN     SETC  'ZTRCWTIX'
+&TRC     SETC  'ZTRCWTTR'
+         AGO   .TRC900
+.*
+.**      EOT= expansion
+.*
+.TRC300  ANOP  ,
+         AIF   ('&EOT' EQ '').TRC400
+&TIV     SETC  '&EOT'
+&TID     SETC  'ZTRCEOT'
+&TMD     SETC  'ZTRCETLX'
+&TIN     SETC  'ZTRCETIX'
+&TRC     SETC  'ZTRCETTR'
+         AGO   .TRC900
+.*
+.**      EOM= expansion
+.*
+.TRC400  ANOP  ,
+         AIF   ('&EOM' EQ '').TRC500
+&TIV     SETC  '&EOM'
+&TID     SETC  'ZTRCEOM'
+&TMD     SETC  'ZTRCEMLX'
+&TIN     SETC  'ZTRCEMIX'
+&TRC     SETC  'ZTRCEMTR'
+         AGO   .TRC900
+.*
+.**      ENF= expansion
+.*
+.TRC500  ANOP  ,
+         AIF   ('&ENF' EQ '').TRC600
+&TIV     SETC  '&ENF'
+&TID     SETC  'ZTRCENF'
+&TMD     SETC  'ZTRCENLX'
+&TIN     SETC  'ZTRCENIX'
+&TRC     SETC  'ZTRCENTR'
+         AGO   .TRC900
+.*
+.**      NUC= expansion
+.*
+.TRC600  ANOP  ,
+         AIF   ('&NUC' EQ '').TRC610
+&TIV     SETC  '&NUC'
+&TID     SETC  'ZTRCNUC'
+&TMD     SETC  'ZTRCNCLX'
+&TIN     SETC  'ZTRCNCIX'
+&TRC     SETC  'ZTRCNCTR'
+         AGO   .TRC900
+.*
+.**      TRG= expansion
+.*
+.TRC610  ANOP  ,
+         AIF   ('&TRG' EQ '').TRC620
+&TIV     SETC  '&TRG'
+&TID     SETC  'ZTRCTRG'
+&TMD     SETC  'ZTRCTRLX'
+&TIN     SETC  'ZTRCTRIX'
+&TRC     SETC  'ZTRCTRTR'
+         AGO   .TRC900
+.*
+.**      RUN= expansion
+.*
+.TRC620  ANOP  ,
+         AIF   ('&RUN' EQ '').TRC630
+&TIV     SETC  '&RUN'
+&TID     SETC  'ZTRCRUN'
+&TMD     SETC  'ZTRCRULX'
+&TIN     SETC  'ZTRCRUIX'
+&TRC     SETC  'ZTRCRUTR'
+         AGO   .TRC900
+.*
+.**      LOC= expansion
+.*
+.TRC630  ANOP  ,
+         AIF   ('&LOC' EQ '').TRC640
+&TIV     SETC  '&LOC'
+&TID     SETC  'ZTRCLOC'
+&TMD     SETC  'ZTRCLOLX'
+&TIN     SETC  'ZTRCLOIX'
+&TRC     SETC  'ZTRCLOTR'
+         AGO   .TRC900
+.*
+.**      PAR= expansion
+.*
+.TRC640  ANOP  ,
+         AIF   ('&PAR' EQ '').TRC650
+&TIV     SETC  '&PAR'
+&TID     SETC  'ZTRCPAR'
+&TMD     SETC  'ZTRCPALX'
+&TIN     SETC  'ZTRCPAIX'
+&TRC     SETC  'ZTRCPATR'
+         AGO   .TRC900
+.*
+.**      LSN= expansion
+.*
+.TRC650  ANOP  ,
+         AIF   ('&LSN' EQ '').TRC660
+&TIV     SETC  '&LSN'
+&TID     SETC  'ZTRCLSN'
+&TMD     SETC  'ZTRCLSLX'
+&TIN     SETC  'ZTRCLSIX'
+&TRC     SETC  'ZTRCLSTR'
+         AGO   .TRC900
+.*
+.**      SCH= expansion
+.*
+.TRC660  ANOP  ,
+         AIF   ('&SCH' EQ '').TRC700
+&TIV     SETC  '&SCH'
+&TID     SETC  'ZTRCSCH'
+&TMD     SETC  'ZTRCSCLX'
+&TIN     SETC  'ZTRCSCIX'
+&TRC     SETC  'ZTRCSCTR'
+         AGO   .TRC900
+.*
+.**      SRB= expansion
+.*
+.TRC700  ANOP  ,
+         AIF   ('&SRB' EQ '').TRC710
+&TIV     SETC  '&SRB'
+&TID     SETC  'ZTRCSRB'
+&TMD     SETC  'ZTRCSRLX'
+&TIN     SETC  'ZTRCSRIX'
+&TRC     SETC  'ZTRCSRTR'
+         AGO   .TRC900
+.*
+.**      Db2= expansion
+.*
+.TRC710  ANOP  ,
+         AIF   ('&DB2' EQ '').TRC720
+&TIV     SETC  '&DB2'
+&TID     SETC  'ZTRCDB2'
+&TMD     SETC  'ZTRCDBLX'
+&TIN     SETC  'ZTRCDBIX'
+&TRC     SETC  'ZTRCDBTR'
+         AGO   .TRC900
+.*
+.**      XCF= expansion
+.*
+.TRC720  ANOP  ,
+         AIF   ('&XCF' EQ '').TRC730
+&TIV     SETC  '&XCF'
+&TID     SETC  'ZTRCXCF'
+&TMD     SETC  'ZTRCXCLX'
+&TIN     SETC  'ZTRCXCIX'
+&TRC     SETC  'ZTRCXCTR'
+         AGO   .TRC900
+.*
+.**      SOM= expansion
+.*
+.TRC730  ANOP  ,
+         AIF   ('&SOM' EQ '').TRC800
+&TIV     SETC  '&SOM'
+&TID     SETC  'ZTRCSOM'
+&TMD     SETC  'ZTRCSMLX'
+&TIN     SETC  'ZTRCSMIX'
+&TRC     SETC  'ZTRCSMTR'
+         AGO   .TRC900
+.*
+.**      IRB= expansion
+.*
+.TRC800  ANOP  ,
+         AIF   ('&IRB' EQ '').ERR01
+&TIV     SETC  '&IRB'
+&TID     SETC  'ZTRCIRB'
+&TMD     SETC  'ZTRCIRLX'
+&TIN     SETC  'ZTRCIRIX'
+&TRC     SETC  'ZTRCIRTR'
+         AGO   .TRC900
+.*
+.TRC900  ANOP  ,
+         AIF   ('&CLEAR' NE 'YES').TRC910
+         MVC   &TRC,ZXVTDOTS           .clear trace data
+*
+.TRC910  ANOP  ,
+         MVI   &TID&TIV,C'&TIV'        .trace ID
+         AIF   ('&MID' EQ '').TRC920
+         MVC   &TIN,&MID               .routine ID
+.*
+.TRC920  ANOP  ,
+         AIF   ('&MOD' EQ '').TRC930
+         MVC   &TMD,=CL8'&MOD'         .module ID
+.*
+.TRC930  ANOP  ,
+         AIF   ('&SWKEY' EQ 'NO').TRC999
+         SPKA  0(2)                    .restore caller key
+         LR    2,&WREG                 .restore register 2
+.*
+.TRC999  ANOP  ,
+&TRZ     DS    0H
+         MEXIT ,
+*
+**       Macro Notes
+*
+.ERR01   MNOTE 8,'*** ZZTRC - Invalid trace ID specified'
+         MEND

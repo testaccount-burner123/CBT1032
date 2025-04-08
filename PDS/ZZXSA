@@ -1,0 +1,62 @@
+         MACRO
+*/*******************************************************************/
+*/*                                                                 */
+*/* Name: ZZXSA                                                     */
+*/*                                                                 */
+*/* Description: Common service routine extended savearea           */
+*/*                                                                 */
+*/* Notes: None                                                     */
+*/*                                                                 */
+*/*******************************************************************/
+*---------------------------CHANGE LOG-------------------------------*
+*                                                                    *
+* ID    Rel    Date       Author        Comments                     *
+*--------------------------------------------------------------------*
+* @01 | V1R1 | 12072021 | Ben Marino  | Initial version              *
+*     |      |          |             |                              *
+**********************************************************************
+*-------+---------+---------+---------+---------+---------+---------+*
+         ZZXSA ,
+ZXSA     DSECT ,
+XSASAVE  DS    18F                    savearea
+XSAID    DC    CL4'ZXSA'              ID
+XSAFLG1  DS    XL1                    flags
+XSA@NOGN EQU   X'80'                  skip generic data check
+XSA@002  EQU   X'40'                  -available
+XSA@003  EQU   X'20'                  -available
+XSA@004  EQU   X'10'                  -available
+XSA@005  EQU   X'08'                  -available
+XSA@006  EQU   X'04'                  -available
+XSA@007  EQU   X'02'                  -available
+XSA@008  EQU   X'01'                  -available
+         DS    0C
+XSAJOBID DS    CL1                    JOB ID
+XSARSVR3 DS    CL2                    -reserved
+         DS    0F
+XSARC    DS    F                      RC
+XSARSN   DS    F                      RSN
+XSACKEY  DS    F                      caller key
+XSATCB   DS    A                      TCB address
+XSAASCB  DS    A                      ASCB address
+XSAZXRE  DS    A                      ZXRE address
+XSAZASY  DS    A                      ZASY address
+XSAPARM  DS    A                      parameter word
+XSAZXSA2 DS    A                      XSA2 address
+XSASDATA DS    A                      source data address
+XSACDATA DS    A                      compare data address
+XSAASID  DS    H                      ASID
+XSARSVR4 DS    H                      -reserved
+         DS    0D
+XSASTOKN DS    XL8                    STOKEN
+XSAJOBNM DS    CL8                    input job name
+XSATRPGM DS    CL8                    program name
+XSATRJOB DS    CL8                    trigger jobname
+XSAPARJB DS    CL8                    parse jobname
+XSA@PJBL EQU   *-XSAPARJB             parse jobname length
+         DS    0D
+XSAWORKA DS    CL8                    general workarea
+XSATTOKN DS    XL16                   TCB token
+XSAPLIST DS    CL64                   parmlist
+         DS    0D
+XSA@SIZE EQU   *-ZXSA                 XSA size
+         MEND  ,
